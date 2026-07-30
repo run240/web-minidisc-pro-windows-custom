@@ -17,7 +17,7 @@ function inspectWindowsUsbDrivers() {
     const command = [
         "$ErrorActionPreference = 'Stop'",
         "$devices = Get-CimInstance Win32_PnPEntity -Filter \"PNPDeviceID LIKE 'USB\\\\VID_%'\"",
-        '$result = @($devices | ForEach-Object { [PSCustomObject]@{ instanceId = $_.PNPDeviceID; service = $_.Service } })',
+        '$result = @($devices | ForEach-Object { [PSCustomObject]@{ instanceId = $_.PNPDeviceID; service = $_.Service; name = $_.Name } })',
         '$result | ConvertTo-Json -Compress',
     ].join('; ');
     try {
@@ -31,6 +31,15 @@ function inspectWindowsUsbDrivers() {
         console.warn('Windows USB 드라이버 상태를 읽지 못했습니다.', error);
         return [];
     }
+}
+function getWindowsUsbIdentity(instanceId) {
+    const match = /^USB\\VID_([0-9A-F]{4})&PID_([0-9A-F]{4})/i.exec(instanceId);
+    if (!match)
+        return null;
+    return {
+        vendorId: Number.parseInt(match[1], 16),
+        productId: Number.parseInt(match[2], 16),
+    };
 }
 function getWindowsDriverStatus(drivers, vendorId, productId) {
     var _a;
@@ -52,6 +61,21 @@ function getWindowsDriverStatus(drivers, vendorId, productId) {
         return { driverStatus: 'usbstor', driverName };
     return { driverStatus: 'other', driverName };
 }
+function describeMiniDiscDevice(vendorId, productId, windowsDrivers, transport) {
+    const netMDDefinition = netmd_js_1.DevicesIds.find((entry) => entry.vendorId === vendorId && entry.deviceId === productId);
+    const hiMDDefinition = himd_js_1.DevicesIds.find((entry) => entry.vendorId === vendorId && entry.deviceId === productId);
+    const isHiMD = Boolean(hiMDDefinition);
+    const isNetMD = Boolean(netMDDefinition);
+    const isSony = vendorId === 0x054c;
+    const isVirtualExploitDevice = vendorId === 0x5341 && productId === 0x5256;
+    if ((!isHiMD && !isNetMD) || isVirtualExploitDevice)
+        return null;
+    const modelNames = [...new Set([netMDDefinition === null || netMDDefinition === void 0 ? void 0 : netMDDefinition.name, hiMDDefinition === null || hiMDDefinition === void 0 ? void 0 : hiMDDefinition.name].filter(Boolean))];
+    return Object.assign({ vendorId,
+        productId, vendorIdHex: toHex(vendorId), productIdHex: toHex(productId), busNumber: transport === null || transport === void 0 ? void 0 : transport.busNumber, deviceAddress: transport === null || transport === void 0 ? void 0 : transport.deviceAddress, mode: isHiMD ? 'himd' : isNetMD ? 'netmd' : isSony ? 'sony-usb' : 'unknown', isSony, modelHint: vendorId === 0x054c && (productId === 0x0219 || productId === 0x021a)
+            ? 'Sony MZ-RH10 / MZ-M100'
+            : modelNames.join(' / ') || (transport === null || transport === void 0 ? void 0 : transport.name) || 'MiniDisc USB Device', supportsNetMD: isNetMD, supportsHiMD: isHiMD, requiredDriver: 'WinUSB' }, getWindowsDriverStatus(windowsDrivers, vendorId, productId));
+}
 function getMiniDiscDiagnostics() {
     const windowsDrivers = inspectWindowsUsbDrivers();
     let usbDevices = [];
@@ -61,24 +85,24 @@ function getMiniDiscDiagnostics() {
     catch (error) {
         console.warn('USB 장치 목록을 읽지 못했습니다.', error);
     }
-    const devices = usbDevices
+    const libusbDevices = usbDevices
         .map((device) => {
         const { idVendor: vendorId, idProduct: productId } = device.deviceDescriptor;
-        const netMDDefinition = netmd_js_1.DevicesIds.find((entry) => entry.vendorId === vendorId && entry.deviceId === productId);
-        const hiMDDefinition = himd_js_1.DevicesIds.find((entry) => entry.vendorId === vendorId && entry.deviceId === productId);
-        const isHiMD = Boolean(hiMDDefinition);
-        const isNetMD = Boolean(netMDDefinition);
-        const isSony = vendorId === 0x054c;
-        const isVirtualExploitDevice = vendorId === 0x5341 && productId === 0x5256;
-        if ((!isHiMD && !isNetMD) || isVirtualExploitDevice)
-            return null;
-        const modelNames = [...new Set([netMDDefinition === null || netMDDefinition === void 0 ? void 0 : netMDDefinition.name, hiMDDefinition === null || hiMDDefinition === void 0 ? void 0 : hiMDDefinition.name].filter(Boolean))];
-        return Object.assign({ vendorId,
-            productId, vendorIdHex: toHex(vendorId), productIdHex: toHex(productId), busNumber: device.busNumber, deviceAddress: device.deviceAddress, mode: isHiMD ? 'himd' : isNetMD ? 'netmd' : isSony ? 'sony-usb' : 'unknown', isSony, modelHint: vendorId === 0x054c && (productId === 0x0219 || productId === 0x021a)
-                ? 'Sony MZ-RH10 / MZ-M100'
-                : modelNames.join(' / ') || 'MiniDisc USB Device', supportsNetMD: isNetMD, supportsHiMD: isHiMD, requiredDriver: 'WinUSB' }, getWindowsDriverStatus(windowsDrivers, vendorId, productId));
+        return describeMiniDiscDevice(vendorId, productId, windowsDrivers, device);
     })
         .filter((device) => device !== null);
+    const knownIds = new Set(libusbDevices.map((device) => `${device.vendorId}:${device.productId}`));
+    const pnpOnlyDevices = windowsDrivers
+        .map((driver) => {
+        const identity = getWindowsUsbIdentity(driver.instanceId);
+        if (!identity || knownIds.has(`${identity.vendorId}:${identity.productId}`))
+            return null;
+        return describeMiniDiscDevice(identity.vendorId, identity.productId, windowsDrivers, {
+            name: driver.name,
+        });
+    })
+        .filter((device) => device !== null);
+    const devices = [...libusbDevices, ...pnpOnlyDevices];
     const guidance = process.platform === 'win32'
         ? [
             '지원되는 NetMD 및 Hi-MD 장치는 Windows에서 WinUSB 드라이버가 필요합니다.',

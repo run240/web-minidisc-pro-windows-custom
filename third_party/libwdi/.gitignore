@@ -38,6 +38,7 @@ build64.h
 compile
 config.guess
 config.h*
+!msvc/config.h
 config.log
 config.status
 config.sub
