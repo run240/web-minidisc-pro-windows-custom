@@ -1,0 +1,48 @@
+Web MiniDisc Pro 1.5.4 - Windows Custom Build
+================================================
+
+이 배포본은 ElectronWMD / Web MiniDisc Pro를 기반으로 수정한
+비공식 Windows 커스텀 빌드입니다. 원본 프로젝트와 공식 배포본이 아닙니다.
+
+Original projects
+-----------------
+ElectronWMD: https://github.com/asivery/ElectronWMD
+Web MiniDisc Pro: https://github.com/asivery/webminidisc
+
+Original authors and contributors
+---------------------------------
+Stefano Brilli, Asivery 및 각 원본 프로젝트의 기여자
+
+Base revisions used for reference
+---------------------------------
+ElectronWMD: a3f30f8ae3bb022aa8aa58776dc7e473c09ad066
+webminidisc: 30c3045155a1c057171506aaf3ffee64552df679
+
+Main modifications
+------------------
+- Windows용 WinUSB 설치 및 MiniDisc 기기/모드 진단 보조 기능
+- WinUSB 설치 진행 상태, 경과 시간, 결과 검증 및 응답 시간 초과 안내
+- 여러 NetMD 및 Hi-MD 기기와 모드 전환을 위한 연결 화면
+- 여러 MiniDisc 연결 시 모델과 USB 위치를 표시하는 기기 선택 화면
+- NetMD/Hi-MD 포맷 흐름과 재실행 처리
+- 한국어 UI 및 파일명 로마자 변환 보조
+- Windows 커스텀 다크 테마, 아이콘, 로딩 화면, 팝업 UI
+- Hi-MD 임시 편집, 일괄 적용 및 편집 안전장치
+- NetMD 트랙 제목·순서 임시 편집, 일괄 적용 및 적용 결과 검증
+- MD 전송 정지 감지, 추정 원인 안내 및 진단 정보 복사
+- 기타 사용성 및 안정성 보완
+
+License and source
+------------------
+이 프로그램은 GNU GPL version 2 조건에 따라 배포됩니다.
+전체 라이선스는 LICENSE-GPL-2.0.txt를 확인하세요.
+
+이 빌드에서 직접 수정한 읽을 수 있는 파일의 사본은
+SOURCE-MODIFICATIONS 폴더에 포함되어 있습니다. 실행 중인 동일 파일은
+dist 및 renderer 폴더에도 들어 있습니다. 원본 전체 소스는 위의 원본
+프로젝트 주소에서 받을 수 있습니다.
+
+No warranty
+-----------
+이 프로그램은 어떠한 보증도 없이 제공됩니다. 디스크 포맷, 드라이버 설치,
+실험 기능 사용 전에 필요한 데이터를 별도로 백업하세요.
