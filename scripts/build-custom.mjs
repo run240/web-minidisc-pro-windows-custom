@@ -4,7 +4,6 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 
 function run(command, args, options = {}) {
@@ -45,16 +44,6 @@ function patchInterface(sourceName) {
 const renderer = join(root, 'renderer');
 rmSync(renderer, { recursive: true, force: true });
 
-run(npm, ['ci', '--legacy-peer-deps'], { cwd: join(root, 'webminidisc') });
-run(npm, ['run', 'build'], {
-  cwd: join(root, 'webminidisc'),
-  env: {
-    PUBLIC_URL: 'sandbox://',
-    NODE_OPTIONS: process.env.NODE_OPTIONS ?? '--openssl-legacy-provider',
-  },
-});
-copy(join(root, 'webminidisc', 'dist'), renderer);
-
 patchInterface('himd.ts');
 patchInterface('netmd.ts');
 copy(
@@ -64,6 +53,9 @@ copy(
 run(npx, ['tsc']);
 
 copy(join(root, 'custom-overrides', 'dist'), join(root, 'dist'));
+// The customized renderer is a complete, reviewed build artifact. Building
+// the upstream submodule first would only be overwritten here and also makes
+// the Windows build depend on the upstream submodule's stale package lock.
 copy(join(root, 'custom-overrides', 'renderer'), renderer);
 
 const extras = join(root, 'extras');
