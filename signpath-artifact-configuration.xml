@@ -7,11 +7,5 @@
     <pe-file path="resources/app/extras/wmdp-driver-helper.exe">
       <authenticode-sign />
     </pe-file>
-    <pe-file-set>
-      <include path="*.dll" min-matches="0" max-matches="unbounded" />
-      <for-each>
-        <authenticode-sign />
-      </for-each>
-    </pe-file-set>
   </zip-file>
 </artifact-configuration>

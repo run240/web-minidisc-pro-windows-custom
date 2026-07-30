@@ -68,6 +68,16 @@ The unpacked application is written to `build\win-unpacked`.
 For the signing workflow and SignPath configuration, see
 [PUBLIC-SIGNING.md](PUBLIC-SIGNING.md).
 
+## Code signing policy
+
+The project's code-signing roles, privacy statement, release approval process,
+and Windows system-change policy are documented in
+[CODE-SIGNING-POLICY.md](CODE-SIGNING-POLICY.md).
+
+Free code signing provided by
+[SignPath.io](https://signpath.io/), certificate by
+[SignPath Foundation](https://signpath.org/).
+
 ## License and credits
 
 ElectronWMD and Web MiniDisc Pro are distributed under the GNU General Public
