@@ -40,7 +40,7 @@ function patchInterface(sourceName) {
 const renderer = join(root, 'renderer');
 rmSync(renderer, { recursive: true, force: true });
 
-run(npm, ['ci'], { cwd: join(root, 'webminidisc') });
+run(npm, ['ci', '--legacy-peer-deps'], { cwd: join(root, 'webminidisc') });
 run(npm, ['run', 'build'], {
   cwd: join(root, 'webminidisc'),
   env: {

@@ -58,7 +58,7 @@ Requirements:
 From an x64 Native Tools Command Prompt:
 
 ```powershell
-npm ci
+npm ci --legacy-peer-deps
 third_party\libwdi\build-wmdp-helper.cmd
 npm run pack:custom
 ```

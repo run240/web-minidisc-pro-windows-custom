@@ -37,7 +37,7 @@ jobs:
           arch: x64
 
       - name: Install application dependencies
-        run: npm ci
+        run: npm ci --legacy-peer-deps
 
       - name: Build the WinUSB driver helper from source
         shell: cmd
