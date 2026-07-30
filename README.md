@@ -1,84 +1,81 @@
-# Electron Web MiniDisc
+# Web MiniDisc Pro — Windows Custom Build
 
-Electron version of [Web MiniDisc Pro](https://github.com/asivery/webminidisc)
+An unofficial, non-commercial Windows build of
+[ElectronWMD](https://github.com/asivery/ElectronWMD) and
+[Web MiniDisc Pro](https://github.com/asivery/webminidisc), focused on
+NetMD/Hi-MD device support and an integrated WinUSB installation flow.
 
-For all the people who want to use all of Web MiniDisc Pro's features but don't want to use Google Chrome
-____
+> This repository is not an official release of ElectronWMD, Web MiniDisc Pro,
+> Sony, or MiniDisc.wiki. Back up important recordings before testing.
 
-## Note for users only
+## Status
 
-If you're not a developer, and are just looking for a pre-built app, you can download it from the [releases section](https://github.com/asivery/ElectronWMD/releases).
+The source and GitHub Actions build pipeline are public. Windows release
+binaries will be published after the open-source code-signing setup has been
+approved and verified on Windows 11 with Smart App Control enabled.
 
-MacOS users might need to run some Terminal commands for the app to work due to Apple's restrictive security policies. These commands are listed from [here](#de-quarantine-the-application) onwards.
+Free code signing provided by
+[SignPath.io](https://signpath.io/), certificate by
+[SignPath Foundation](https://signpath.org/).
 
+## Main changes
 
-## Building
-The project consists of two parts:
-- The main electron code
-- The renderer (GUI) code (The Web MiniDisc project itself)
+- Integrated WinUSB helper based on libwdi 1.5.1
+- NetMD and Hi-MD connection and mode diagnostics
+- Multiple connected-device selection
+- Korean UI and filename romanization improvements
+- Hi-MD and NetMD temporary metadata editing
+- Transfer-stall diagnostics and troubleshooting information
+- Windows-focused theme, icons, loading screen, and dialogs
 
-This repository contains only the main electron app.
-Upon building, it will clone the renderer repository ([https://github.com/asivery/webminidisc](https://github.com/asivery/webminidisc)), and build that too.
+## Source layout
 
-You can:
-- Install node modules (`npm i`) (the `--legacy-peer-deps` switch might be required for newer node.js versions)
-- Start the development version (`npm start`)
-- Deploy the production version (`npm run dist`)
-- Deploy the production versions for macOS (`npm run dist-mac`)
-____
+- `src/`: ElectronWMD source
+- `webminidisc/`: pinned Web MiniDisc Pro submodule
+- `third_party/libwdi/`: complete corresponding source for the WinUSB helper
+- `custom-overrides/`: exact V3 generated-file modifications
+- `.github/workflows/build-signpath.yml`: Windows build and SignPath submission
+- `signpath-artifact-configuration.xml`: Authenticode signing scope
 
-### Important development changes
+Base revisions:
 
-Because of Web Minidisc Pro's reliance on older versions of packages such as React and material-ui, you might need to change
+- ElectronWMD: `a3f30f8ae3bb022aa8aa58776dc7e473c09ad066`
+- Web MiniDisc Pro: `30c3045155a1c057171506aaf3ffee64552df679`
 
+The current V3 modifications were originally made against generated output.
+They are kept as a transparent build overlay so the existing release can be
+reproduced. Future changes should be moved into the TypeScript/React sources
+where practical.
+
+## Building on Windows
+
+Requirements:
+
+- Node.js 20
+- Visual Studio 2022 Build Tools with Desktop development with C++
+- Windows 10 or Windows 11 SDK
+
+From an x64 Native Tools Command Prompt:
+
+```powershell
+npm ci
+third_party\libwdi\build-wmdp-helper.cmd
+npm run pack:custom
 ```
-npm i
-```
 
-to
+The unpacked application is written to `build\win-unpacked`.
 
-```
-npm i --legacy-peer-deps
-```
+For the signing workflow and SignPath configuration, see
+[PUBLIC-SIGNING.md](PUBLIC-SIGNING.md).
 
-in `build-renderer.sh` depending on your node.js version.
+## License and credits
 
-### Development on macOS
-#### Install Xcode Build Tools CLI & Homebrew
+ElectronWMD and Web MiniDisc Pro are distributed under the GNU General Public
+License version 2. The embedded WinUSB helper is derived from
+[libwdi](https://github.com/pbatard/libwdi), licensed under the GNU Lesser
+General Public License version 3 or later.
 
-Make sure Xcode Build Tools CLI & Homebrew are properly installed - in the Terminal run:
-- `xcode-select install` - to install XCode Command Line Tools
-- `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"` - to install Homebrew
+Original work and contributions belong to Stefano Brilli, Asivery, Pete Batard,
+and the respective upstream project contributors.
 
-#### Install gcc & libvips
-
-In macOS Terminal: `brew install --build-from-source gcc`, wait for it to finish then run `brew install vips` (this command may install gcc again from an available pre-built binary, if one exists for your current macOS version, this is normal behaviour as gcc is needed for vips to work).
-
-#### Build
-Assuming you've completed the above steps, you should be able to follow the standard procedure - run:
-
-- `npm i --legacy-peer-deps` to install the dependencies
-- `npm run dist-mac` to create the binary packages
-
-#### De-quarantine the application
-(For users unfamiliar, the following commands may also need Xcode CLI installed, so start with [this](#install-xcode-build-tools-cli--homebrew), then return to this step.)
-
-To de-quarantine the app on macOS run the following command in the terminal:
-
-- `xattr -d com.apple.quarantine "/path/to/your.app"`
-
-#### Sign the binary
-
-To codesign the local binary with a self-signing certificate run:
-
-- `codesign --sign - --force --deep "/path/to/your.app"`
-
-This should be all that is needed, enjoy the application.
-____
-
-## Final thoughts
-
-Should you run into any issue, you can, of course, open a new issue on this github or reach out to any of the current contributors via the [MiniDisc.wiki Discord](https://minidisc.wiki/discord) in the #research or #software-help channels
-
-
-Many thanks to [cybercase](https://github.com/cybercase) for writing the original Web MiniDisc and letting so many people experience this forgotten format again.
+This software is provided without warranty.

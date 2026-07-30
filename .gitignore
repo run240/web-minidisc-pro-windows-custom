@@ -1,7 +1,11 @@
-dist
-node_modules
-build
-renderer
+/dist
+/node_modules
+/build
+/renderer
+extras/wmdp-driver-helper.exe
+extras/LIBWDI-SOURCE-v1.5.1-wmdp.zip
+SOURCE-MODIFICATIONS
+MODIFIED-BUILD-NOTICE.txt
 
 *.local
 EKBROOTS.DES

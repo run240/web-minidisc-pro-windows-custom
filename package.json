@@ -1,10 +1,18 @@
 {
   "name": "electronwmd",
+  "productName": "Web MiniDisc Pro",
   "version": "0.5.2-1.5.4",
   "description": "Electron version of WebMinidisc Pro",
+  "homepage": "https://github.com/run240/web-minidisc-pro-windows-custom",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/run240/web-minidisc-pro-windows-custom.git"
+  },
   "main": "dist/main.js",
   "scripts": {
     "build": "./build-renderer.sh && ./run-fixes.sh && tsc",
+    "build:custom": "node scripts/build-custom.mjs",
+    "pack:custom": "npm run build:custom && electron-builder --dir --win --x64",
     "start": "npm run build && NODE_ENV=development electron ./dist/main.js",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder -wl --x64 && electron-builder -w --ia32",
@@ -19,7 +27,8 @@
     "compression": "store",
     "asar": false,
     "win": {
-      "icon": "./res/icon.ico"
+      "icon": "./res/icon.ico",
+      "executableName": "Web MiniDisc Pro"
     },
     "linux": {
       "icon": "./res/icon.png"
@@ -28,13 +37,16 @@
       "node_modules",
       "dist",
       "renderer",
-      "res"
+      "res",
+      "extras",
+      "SOURCE-MODIFICATIONS",
+      "MODIFIED-BUILD-NOTICE.txt"
     ],
     "buildDependenciesFromSource": false,
     "nodeGypRebuild": false,
     "npmRebuild": false
   },
-  "author": "asivery",
+  "author": "asivery and contributors",
   "private": true,
   "dependencies": {
     "async-mutex": "^0.3.2",
