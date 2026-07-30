@@ -8,12 +8,17 @@ const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 
 function run(command, args, options = {}) {
+  const useWindowsCommandShell =
+    process.platform === 'win32' && /\.(cmd|bat)$/i.test(command);
   const result = spawnSync(command, args, {
     cwd: options.cwd ?? root,
     env: { ...process.env, ...options.env },
     stdio: 'inherit',
-    shell: false,
+    shell: useWindowsCommandShell,
   });
+  if (result.error) {
+    throw result.error;
+  }
   if (result.status !== 0) {
     throw new Error(`${command} ${args.join(' ')} failed with exit code ${result.status}`);
   }
