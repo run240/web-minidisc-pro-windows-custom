@@ -13,6 +13,7 @@
 *.m4
 *.mac
 *.manifest
+!examples/common_controls_and_elevation.manifest
 *.ncb
 *.o
 *.obj
