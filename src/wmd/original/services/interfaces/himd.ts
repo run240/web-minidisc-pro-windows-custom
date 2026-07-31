@@ -1,6 +1,6 @@
 // This file has been auto-generated! DO NOT EDIT!
 import { Mutex } from 'async-mutex';
-import { DiscFormat, TrackFlag } from 'netmd-js';
+import { TrackFlag } from 'netmd-js';
 import { Logger } from 'netmd-js/dist/logger';
 import { makeAsyncWorker, makeAsyncCryptoBlockProvider } from 'himd-js/dist/web-crypto-worker';
 import {
@@ -69,37 +69,37 @@ export class HiMDSpec implements MinidiscSpec {
         const t = (x: string) => Math.floor((x.length + 13) / 14) * 14;
         let amt = 0;
         // TODO: this can be integrated into himd-js at some point...
-        for(let group of disc.groups){
-            if(group.title){
+        for (let group of disc.groups) {
+            if (group.title) {
                 amt += t(group.title);
             }
-            for(let track of group.tracks){
-                if(track.title) amt += t(track.title);
-                if(track.album) amt += t(track.album);
-                if(track.artist) amt += t(track.artist);
+            for (let track of group.tracks) {
+                if (track.title) amt += t(track.title);
+                if (track.album) amt += t(track.album);
+                if (track.artist) amt += t(track.artist);
             }
         }
-        if(disc.title) amt += t(disc.title);
+        if (disc.title) amt += t(disc.title);
         return { halfWidth: ALL_CHARACTERS - amt, fullWidth: 1 };
     }
 
     getCharactersForTitle(track: Track): { halfWidth: number; fullWidth: number } {
         const t = (x: string) => Math.floor((x.length + 13) / 14) * 14;
         let amt = 0;
-        if(track.title) amt += t(track.title);
-        if(track.album) amt += t(track.album);
-        if(track.artist) amt += t(track.artist);
+        if (track.title) amt += t(track.title);
+        if (track.album) amt += t(track.album);
+        if (track.artist) amt += t(track.artist);
         return { halfWidth: amt, fullWidth: 0 };
     }
 
     translateDefaultMeasuringModeTo(codec: Codec, defaultMeasuringModeDuration: number): number {
-        throw new Error("Illegal in bytes-measuring mode!");
+        throw new Error('Illegal in bytes-measuring mode!');
     }
 
     translateToDefaultMeasuringModeFrom(codec: Codec, defaultMeasuringModeDuration: number): number {
-        const imprecise = defaultMeasuringModeDuration /*in seconds*/ * codec.bitrate * 1024 / 8;
+        const imprecise = (defaultMeasuringModeDuration /*in seconds*/ * codec.bitrate * 1024) / 8;
         let frameSize;
-        switch(codec.codec) {
+        switch (codec.codec) {
             case 'A3+':
                 frameSize = HiMDKBPSToFrameSize.atrac3plus[codec.bitrate]!;
                 break;
@@ -163,7 +163,7 @@ export class HiMDRestrictedService extends NetMDService {
             fullWidth: 0,
         };
     }
-    getWorker(): any[]{
+    getWorker(): any[] {
         return [new Worker(new URL(WorkerURL, window.location.href), { type: 'classic' }), makeAsyncWorker, makeAsyncCryptoBlockProvider];
     }
 
@@ -185,7 +185,7 @@ export class HiMDRestrictedService extends NetMDService {
         if (this.cachedDisc === undefined) {
             let { left, total, used } = await this.himd!.filesystem.statFilesystem();
 
-            if(left < 1048576) {
+            if (left < 1048576) {
                 // If we have less than a MiB left, make it seem the drive is 100% filled.
                 used += left;
                 left = 0;
@@ -203,7 +203,7 @@ export class HiMDRestrictedService extends NetMDService {
                     fullWidthTitle: '',
                     title: g.title ?? (i === 0 ? null : ''),
                     index: g.startIndex,
-                    tracks: g.tracks.map(trk => ({
+                    tracks: g.tracks.map((trk) => ({
                         index: trk.index,
                         title: trk.title ?? '',
                         album: trk.album ?? '',
@@ -215,7 +215,9 @@ export class HiMDRestrictedService extends NetMDService {
                         duration: trk.duration,
                     })) as Track[],
                 })),
-                left, total, used,
+                left,
+                total,
+                used,
                 trackCount,
                 writable: false,
                 writeProtected: true,
@@ -233,8 +235,8 @@ export class HiMDRestrictedService extends NetMDService {
     }
 
     async listContent(dropCache?: boolean | undefined): Promise<Disc> {
-        if(dropCache && this.himd?.isDirty()) {
-            window.alert("You have changes not yet written to disc. Please apply changes first.");
+        if (dropCache && this.himd?.isDirty()) {
+            window.alert('You have changes not yet written to disc. Please apply changes first.');
             await this.reloadCache();
             return JSON.parse(JSON.stringify(this.cachedDisc!));
         }
@@ -268,7 +270,7 @@ export class HiMDRestrictedService extends NetMDService {
         // groupIndex here is the index of the first track in the group
         // convert it to the actual group index
         const groups = getGroups(this.himd!);
-        const index = groups.find(e => e.startIndex === groupIndex && e.title !== null)!.groupIndex;
+        const index = groups.find((e) => e.startIndex === groupIndex && e.title !== null)!.groupIndex;
         renameGroup(this.himd!, index, newTitle);
         this.dropCachedContentList();
     }
@@ -280,7 +282,7 @@ export class HiMDRestrictedService extends NetMDService {
 
     async deleteGroup(groupIndex: number) {
         const groups = getGroups(this.himd!);
-        const index = groups.find(e => e.startIndex === groupIndex && e.title !== null)!.groupIndex;
+        const index = groups.find((e) => e.startIndex === groupIndex && e.title !== null)!.groupIndex;
         deleteGroup(this.himd!, index);
         this.dropCachedContentList();
     }
@@ -289,10 +291,10 @@ export class HiMDRestrictedService extends NetMDService {
         rewriteGroups(
             this.himd!,
             groups
-                .filter(e => e.title !== null)
-                .map(e => ({
+                .filter((e) => e.title !== null)
+                .map((e) => ({
                     title: e.title,
-                    indices: e.tracks.map(q => q.index),
+                    indices: e.tracks.map((q) => q.index),
                 }))
         );
         this.dropCachedContentList();
@@ -355,12 +357,7 @@ export class HiMDRestrictedService extends NetMDService {
     }
 
     async getServiceCapabilities() {
-        return [
-            Capability.contentList,
-            Capability.metadataEdit,
-            Capability.trackDownload,
-            Capability.himdTitles,
-        ];
+        return [Capability.contentList, Capability.metadataEdit, Capability.trackDownload, Capability.himdTitles];
     }
 
     async pair() {
@@ -388,7 +385,7 @@ export class HiMDRestrictedService extends NetMDService {
 
     async wipeDiscTitleInfo(): Promise<void> {}
 
-    isDeviceConnected(device: USBDevice){
+    isDeviceConnected(device: USBDevice) {
         return false;
     }
 
@@ -435,21 +432,20 @@ export class HiMDFullService extends HiMDRestrictedService {
     }
 
     async getServiceCapabilities() {
-        return [
-            Capability.contentList,
-            Capability.metadataEdit,
-            Capability.trackDownload,
-            Capability.trackUpload,
-            Capability.himdTitles,
-        ];
+        return [Capability.contentList, Capability.metadataEdit, Capability.trackDownload, Capability.trackUpload, Capability.himdTitles];
     }
 
     async pair() {
+        // A service instance is reused when the renderer returns to the mode
+        // selection screen. Never carry a previous disc across a new pairing.
+        this.himd = undefined;
+        this.cachedDisc = undefined;
+        this.atdata = null;
         const device = await navigator.usb.requestDevice({ filters: DevicesIds });
         await device.open();
-        try{
+        try {
             await device.reset();
-        }catch(ex){
+        } catch (ex) {
             console.log(ex);
         }
         this.fsDriver = new UMSCHiMDFilesystem(device);
@@ -493,7 +489,7 @@ export class HiMDFullService extends HiMDRestrictedService {
     }
 
     async listContent(dropCache?: boolean): Promise<Disc> {
-        if(dropCache){
+        if (dropCache) {
             await this.fsDriver!.init();
         }
         return super.listContent(dropCache);
@@ -505,12 +501,24 @@ export class HiMDFullService extends HiMDRestrictedService {
             await this.session!.finalizeSession();
             this.session = null;
         }
+        await this.himd!.flush();
         this.streamingWorker?.close();
         this.streamingWorker = null;
     }
 
     async finalize(): Promise<void> {
-        await this.fsDriver?.driver?.close();
+        const driver = this.fsDriver?.driver;
+        try {
+            await driver?.close();
+        } finally {
+            this.streamingWorker?.close();
+            this.streamingWorker = null;
+            this.session = null;
+            this.atdata = null;
+            this.himd = undefined;
+            this.fsDriver = undefined;
+            this.dropCachedContentList();
+        }
     }
 
     async prepareUpload(): Promise<void> {
@@ -520,12 +528,17 @@ export class HiMDFullService extends HiMDRestrictedService {
     }
 
     async deleteTracks(indexes: number[]): Promise<void> {
-        const allTrackSlots = indexes.map(e => this.himd!.trackIndexToTrackSlot(e));
+        const allTrackSlots = indexes.map((e) => this.himd!.trackIndexToTrackSlot(e));
+        let content = await this.listContent();
+        for (const index of indexes) {
+            content = recomputeGroupsAfterTrackMove(content, index, -1);
+        }
         await deleteTracks(this.himd!, indexes);
+        this.rewriteGroups(content.groups);
         // Re-sign the disc
         const session = new HiMDSecureSession(this.himd!, this.fsDriver!.driver);
         await session.performAuthentication();
-        for(let trackSlot of allTrackSlots) {
+        for (let trackSlot of allTrackSlots) {
             session.allMacs!.set(new Uint8Array(8).fill(0), (trackSlot - 1) * 8);
         }
         await session.finalizeSession();
@@ -547,7 +560,7 @@ export class HiMDFullService extends HiMDRestrictedService {
                 stream,
                 data,
                 title as { title?: string | undefined; album?: string | undefined; artist?: string | undefined },
-                obj => {
+                (obj) => {
                     if (firstByteOffset === -1) {
                         firstByteOffset = obj.byte;
                     }
@@ -556,7 +569,8 @@ export class HiMDFullService extends HiMDRestrictedService {
                         encrypted: obj.byte - firstByteOffset,
                         total: obj.totalBytes - firstByteOffset,
                     });
-                }
+                },
+                true
             );
         } else {
             if (!this.session) {
@@ -600,11 +614,12 @@ export class HiMDFullService extends HiMDRestrictedService {
                     written = writtenBytes;
                     runCallback();
                 },
+                true
             );
         }
     }
 
-    isDeviceConnected(device: USBDevice){
+    isDeviceConnected(device: USBDevice) {
         return this.fsDriver?.driver.isDeviceConnected(device) ?? false;
     }
 

@@ -68,11 +68,12 @@ function getWindowsDriverStatus(
         entry.instanceId.toUpperCase().includes(`VID_${vid}&PID_${pid}`),
     );
     const driverName = driver?.service?.trim();
-    if (!driverName) return { driverStatus: 'unknown' };
+    const driverInstanceId = driver?.instanceId;
+    if (!driverName) return { driverStatus: 'unknown', driverInstanceId };
     const normalized = driverName.toLowerCase();
-    if (normalized === 'winusb') return { driverStatus: 'winusb', driverName };
-    if (normalized === 'usbstor') return { driverStatus: 'usbstor', driverName };
-    return { driverStatus: 'other', driverName };
+    if (normalized === 'winusb') return { driverStatus: 'winusb', driverName, driverInstanceId };
+    if (normalized === 'usbstor') return { driverStatus: 'usbstor', driverName, driverInstanceId };
+    return { driverStatus: 'other', driverName, driverInstanceId };
 }
 
 function describeMiniDiscDevice(

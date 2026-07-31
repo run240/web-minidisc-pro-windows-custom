@@ -22,11 +22,15 @@ Free code signing provided by
 
 - Integrated WinUSB helper based on libwdi 1.5.1
 - NetMD and Hi-MD connection and mode diagnostics
+- Automatic RH1 NetMD/Hi-MD USB interface switching without replugging
+- Automatic mode reconnection after the application restarts
 - Multiple connected-device selection
 - Korean UI and filename romanization improvements
 - Hi-MD and NetMD temporary metadata editing
+- Hi-MD connection-state cleanup and safer timeout recovery
 - Transfer-stall diagnostics and troubleshooting information
-- Windows-focused theme, icons, loading screen, and dialogs
+- Windows-focused theme, icons, loading screen, dialogs, and context menus
+- Window position and monitor restoration across mode changes
 
 ## Source layout
 
@@ -46,6 +50,10 @@ The current V3 modifications were originally made against generated output.
 They are kept as a transparent build overlay so the existing release can be
 reproduced. Future changes should be moved into the TypeScript/React sources
 where practical.
+
+The complete reviewed renderer bundle is stored under `custom-overrides/renderer`.
+This includes the worker scripts, fonts, WASM files, and image assets required
+for offline and GitHub Actions builds.
 
 ## Building on Windows
 

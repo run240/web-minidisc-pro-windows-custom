@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, protocol, dialog, FileFilter } from 'electron';
+import { app, BrowserWindow, ipcMain, protocol, dialog, FileFilter, screen } from 'electron';
 import { importKeys } from 'networkwm-js';
 import path from 'path';
 import os from 'os';
@@ -198,15 +198,38 @@ function setupEncoder() {
 }
 
 async function createWindow() {
+    const store = new Store();
+    const savedBounds = store.get('windowBounds', null) as Electron.Rectangle | null;
+    const boundsAreVisible = savedBounds && screen.getAllDisplays().some(display => {
+        const area = display.workArea;
+        const overlapWidth = Math.max(0, Math.min(savedBounds.x + savedBounds.width, area.x + area.width) - Math.max(savedBounds.x, area.x));
+        const overlapHeight = Math.max(0, Math.min(savedBounds.y + savedBounds.height, area.y + area.height) - Math.max(savedBounds.y, area.y));
+        return overlapWidth >= 100 && overlapHeight >= 100;
+    });
     const window = new BrowserWindow({
-        width: 1280,
-        height: 900,
+        ...(boundsAreVisible ? savedBounds : { width: 1280, height: 900 }),
         icon: path.join(__dirname, '..', 'res', 'icon.png'),
         webPreferences: {
             nodeIntegration: false,
             preload: path.join(__dirname, 'preload.js'),
         },
     });
+    if (store.get('windowMaximized', false)) window.maximize();
+    let saveBoundsTimer: NodeJS.Timeout | undefined;
+    const saveWindowPlacement = () => {
+        if (window.isDestroyed() || window.isMinimized()) return;
+        store.set('windowBounds', window.getNormalBounds());
+        store.set('windowMaximized', window.isMaximized());
+    };
+    const scheduleWindowPlacementSave = () => {
+        if (saveBoundsTimer) clearTimeout(saveBoundsTimer);
+        saveBoundsTimer = setTimeout(saveWindowPlacement, 250);
+    };
+    window.on('move', scheduleWindowPlacementSave);
+    window.on('resize', scheduleWindowPlacementSave);
+    window.on('maximize', scheduleWindowPlacementSave);
+    window.on('unmaximize', scheduleWindowPlacementSave);
+    window.on('close', saveWindowPlacement);
 
     console.log(app.getPath('exe'))
 
@@ -214,8 +237,6 @@ async function createWindow() {
     window.setMenuBarVisibility(false);
     await window.loadURL('file://' + getOfRenderer('index.html')); //Can't use the `sandbox://` protocol - index.html would (incorrectly) redirect to https
     window.setTitle('Electron WMD');
-
-    const store = new Store();
 
     window.setMenuBarVisibility(false);
 

@@ -41,15 +41,63 @@ function patchInterface(sourceName) {
   writeFileSync(destination, text, 'utf8');
 }
 
+function patchGeneratedHiMDService() {
+  const destination = join(
+    root,
+    'src',
+    'wmd',
+    'original',
+    'services',
+    'interfaces',
+    'himd.ts',
+  );
+  let text = readFileSync(destination, 'utf8');
+  const pairBefore = `    async pair() {
+        const device = await navigator.usb.requestDevice({ filters: DevicesIds });`;
+  const pairAfter = `    async pair() {
+        // A service instance is reused when the renderer returns to the mode
+        // selection screen. Never carry a previous disc across a new pairing.
+        this.himd = undefined;
+        this.cachedDisc = undefined;
+        this.atdata = null;
+        const device = await navigator.usb.requestDevice({ filters: DevicesIds });`;
+  const finalizeBefore = `    async finalize(): Promise<void> {
+        await this.fsDriver?.driver?.close();
+    }`;
+  const finalizeAfter = `    async finalize(): Promise<void> {
+        const driver = this.fsDriver?.driver;
+        try {
+            await driver?.close();
+        } finally {
+            this.streamingWorker?.close();
+            this.streamingWorker = null;
+            this.session = null;
+            this.atdata = null;
+            this.himd = undefined;
+            this.fsDriver = undefined;
+            this.dropCachedContentList();
+        }
+    }`;
+  if (!text.includes(pairBefore) || !text.includes(finalizeBefore)) {
+    throw new Error('The pinned Hi-MD service no longer matches the reviewed patch.');
+  }
+  text = text.replace(pairBefore, pairAfter).replace(finalizeBefore, finalizeAfter);
+  writeFileSync(destination, text, 'utf8');
+}
+
 const renderer = join(root, 'renderer');
 rmSync(renderer, { recursive: true, force: true });
 
 patchInterface('himd.ts');
 patchInterface('netmd.ts');
+patchGeneratedHiMDService();
 copy(
   join(root, 'custom-overrides', 'patches', 'webusb-device.js'),
   join(root, 'node_modules', 'usb', 'dist', 'webusb', 'webusb-device.js'),
 );
+run(process.execPath, [
+  join(root, 'custom-overrides', 'patches', 'patch-node-mass-storage.mjs'),
+]);
 run(npx, ['tsc']);
 
 copy(join(root, 'custom-overrides', 'dist'), join(root, 'dist'));

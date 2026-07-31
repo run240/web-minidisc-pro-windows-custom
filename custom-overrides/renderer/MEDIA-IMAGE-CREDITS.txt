@@ -1,0 +1,16 @@
+Web MiniDisc Pro - media image notes
+=====================================
+
+NetMD card image
+----------------
+Source: image supplied by the app owner during UI customization
+Local file: assets/netmd-media-final.png
+UI use: fitted at its original square aspect ratio inside the NetMD mode card.
+
+Hi-MD card image
+----------------
+Source: Sony Hi-MD front by Bruce Taylor (broooce), Wikimedia Commons
+Source page: https://commons.wikimedia.org/wiki/File:Sony_Hi-MD_front.jpg
+License: CC BY-SA 3.0 (or a compatible later version)
+Local file: assets/himd-media-wikimedia.jpg
+UI use: center-cropped inside the Hi-MD mode card to remove the pale outer margin.

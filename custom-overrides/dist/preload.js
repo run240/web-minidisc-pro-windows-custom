@@ -144,6 +144,276 @@ exports.CHANGELOG = [
     function prepareMiniDiscConnection(mode, selectedDeviceId) {
         return electron_1.ipcRenderer.invoke('prepareMiniDiscConnection', mode, selectedDeviceId);
     }
+    let activeMiniDiscWarning = null;
+    function showMiniDiscWarning(warning = {}) {
+        if (activeMiniDiscWarning)
+            return activeMiniDiscWarning;
+        activeMiniDiscWarning = new Promise((resolve) => {
+            if (!document.getElementById('wmd-warning-style')) {
+                const style = document.createElement('style');
+                style.id = 'wmd-warning-style';
+                style.textContent = `
+                    .wmd-warning-overlay {
+                        position: fixed; inset: 0; z-index: 2147483647;
+                        display: flex; align-items: center; justify-content: center;
+                        padding: 22px; box-sizing: border-box;
+                        background: rgba(3, 4, 8, .74);
+                        backdrop-filter: blur(6px);
+                    }
+                    .wmd-warning-panel {
+                        width: min(600px, calc(100vw - 36px));
+                        overflow: hidden; box-sizing: border-box;
+                        color: #f7f2f6; background: #202027;
+                        border: 1px solid rgba(255, 255, 255, .12);
+                        border-radius: 17px;
+                        box-shadow: 0 26px 80px rgba(0, 0, 0, .68);
+                        font-family: inherit;
+                    }
+                    .wmd-warning-header {
+                        display: flex; align-items: center; gap: 13px;
+                        padding: 20px 22px 17px;
+                        border-bottom: 1px solid rgba(255, 255, 255, .09);
+                    }
+                    .wmd-warning-icon {
+                        display: grid; place-items: center; flex: 0 0 auto;
+                        width: 40px; height: 40px; border-radius: 12px;
+                        color: #ff8295; background: rgba(226, 71, 96, .13);
+                        border: 1px solid rgba(255, 130, 149, .25);
+                        font-size: 22px; font-weight: 800;
+                    }
+                    .wmd-warning-title {
+                        margin: 0; font-size: 20px; line-height: 1.3;
+                        font-weight: 760; letter-spacing: -.02em;
+                    }
+                    .wmd-warning-body { padding: 20px 22px 18px; }
+                    .wmd-warning-message {
+                        margin: 0; color: #f5eff3; font-size: 16px;
+                        line-height: 1.55; white-space: pre-wrap;
+                    }
+                    .wmd-warning-detail {
+                        margin: 12px 0 0; color: #bdb7bf; font-size: 13px;
+                        line-height: 1.55; white-space: pre-wrap;
+                    }
+                    .wmd-warning-footer {
+                        display: flex; justify-content: flex-end;
+                        padding: 0 22px 20px;
+                    }
+                    .wmd-warning-close {
+                        min-width: 82px; padding: 10px 17px;
+                        color: #fff; cursor: pointer; font: inherit; font-weight: 700;
+                        background: #c64f88; border: 0; border-radius: 10px;
+                    }
+                    .wmd-warning-close:hover { background: #d45e98; }
+                    .wmd-warning-close:focus-visible {
+                        outline: 2px solid #f4a3ca; outline-offset: 2px;
+                    }
+                `;
+                document.head.appendChild(style);
+            }
+            const overlay = document.createElement('div');
+            overlay.className = 'wmd-warning-overlay';
+            const panel = document.createElement('section');
+            panel.className = 'wmd-warning-panel';
+            panel.setAttribute('role', 'alertdialog');
+            panel.setAttribute('aria-modal', 'true');
+            const header = document.createElement('header');
+            header.className = 'wmd-warning-header';
+            const icon = document.createElement('span');
+            icon.className = 'wmd-warning-icon';
+            icon.setAttribute('aria-hidden', 'true');
+            icon.textContent = '!';
+            const title = document.createElement('h2');
+            title.className = 'wmd-warning-title';
+            title.textContent = warning.title || '알림';
+            const body = document.createElement('div');
+            body.className = 'wmd-warning-body';
+            const message = document.createElement('p');
+            message.className = 'wmd-warning-message';
+            message.textContent = warning.message || '작업을 완료하지 못했습니다.';
+            const detail = document.createElement('p');
+            detail.className = 'wmd-warning-detail';
+            detail.textContent = warning.detail || '';
+            detail.hidden = !warning.detail;
+            const footer = document.createElement('footer');
+            footer.className = 'wmd-warning-footer';
+            const closeButton = document.createElement('button');
+            closeButton.type = 'button';
+            closeButton.className = 'wmd-warning-close';
+            closeButton.textContent = '확인';
+            const close = () => {
+                document.removeEventListener('keydown', onKeyDown, true);
+                overlay.remove();
+                resolve();
+            };
+            const onKeyDown = (event) => {
+                if (event.key === 'Escape' || event.key === 'Enter') {
+                    event.preventDefault();
+                    close();
+                }
+            };
+            closeButton.addEventListener('click', close, { once: true });
+            document.addEventListener('keydown', onKeyDown, true);
+            header.append(icon, title);
+            body.append(message, detail);
+            footer.append(closeButton);
+            panel.append(header, body, footer);
+            overlay.append(panel);
+            document.body.append(overlay);
+            closeButton.focus();
+        }).finally(() => {
+            activeMiniDiscWarning = null;
+        });
+        return activeMiniDiscWarning;
+    }
+    electron_1.ipcRenderer.on('showMiniDiscWarning', async (_event, warning) => {
+        await showMiniDiscWarning(warning);
+        if (warning?.closeChannel)
+            electron_1.ipcRenderer.send(warning.closeChannel);
+    });
+    let activeMiniDiscConfirmation = null;
+    function confirmMiniDiscAction(options = {}) {
+        if (activeMiniDiscConfirmation)
+            return activeMiniDiscConfirmation;
+        activeMiniDiscConfirmation = new Promise((resolve) => {
+            const overlay = document.createElement('div');
+            Object.assign(overlay.style, {
+                position: 'fixed',
+                inset: '0',
+                zIndex: '2147483647',
+                display: 'grid',
+                placeItems: 'center',
+                padding: '22px',
+                boxSizing: 'border-box',
+                background: 'rgba(3, 4, 8, .74)',
+                backdropFilter: 'blur(6px)',
+            });
+            const panel = document.createElement('section');
+            panel.setAttribute('role', 'alertdialog');
+            panel.setAttribute('aria-modal', 'true');
+            Object.assign(panel.style, {
+                width: 'min(600px, calc(100vw - 36px))',
+                overflow: 'hidden',
+                color: '#f7f2f6',
+                background: '#202027',
+                border: '1px solid rgba(255, 255, 255, .12)',
+                borderRadius: '17px',
+                boxShadow: '0 26px 80px rgba(0, 0, 0, .68)',
+                fontFamily: 'inherit',
+            });
+            const header = document.createElement('header');
+            Object.assign(header.style, {
+                display: 'flex',
+                alignItems: 'center',
+                gap: '13px',
+                padding: '20px 22px 17px',
+                borderBottom: '1px solid rgba(255, 255, 255, .09)',
+            });
+            const icon = document.createElement('span');
+            icon.textContent = '?';
+            icon.setAttribute('aria-hidden', 'true');
+            Object.assign(icon.style, {
+                display: 'grid',
+                placeItems: 'center',
+                flex: '0 0 auto',
+                width: '40px',
+                height: '40px',
+                color: '#f5a2c9',
+                background: 'rgba(198, 80, 139, .14)',
+                border: '1px solid rgba(245, 162, 201, .25)',
+                borderRadius: '12px',
+                fontSize: '22px',
+                fontWeight: '800',
+            });
+            const title = document.createElement('h2');
+            title.textContent = options.title || '확인';
+            Object.assign(title.style, {
+                margin: '0',
+                fontSize: '20px',
+                lineHeight: '1.3',
+                fontWeight: '760',
+            });
+            const body = document.createElement('div');
+            Object.assign(body.style, { padding: '20px 22px 18px' });
+            const message = document.createElement('p');
+            message.textContent = options.message || '계속하시겠습니까?';
+            Object.assign(message.style, {
+                margin: '0',
+                color: '#f5eff3',
+                fontSize: '16px',
+                lineHeight: '1.55',
+                whiteSpace: 'pre-wrap',
+            });
+            const detail = document.createElement('p');
+            detail.textContent = options.detail || '';
+            detail.hidden = !options.detail;
+            Object.assign(detail.style, {
+                margin: '12px 0 0',
+                color: '#bdb7bf',
+                fontSize: '13px',
+                lineHeight: '1.55',
+                whiteSpace: 'pre-wrap',
+            });
+            const footer = document.createElement('footer');
+            Object.assign(footer.style, {
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: '10px',
+                padding: '0 22px 20px',
+            });
+            const cancelButton = document.createElement('button');
+            cancelButton.type = 'button';
+            cancelButton.textContent = options.cancelLabel || '취소';
+            Object.assign(cancelButton.style, {
+                minWidth: '82px',
+                padding: '10px 17px',
+                color: '#ddd7dc',
+                cursor: 'pointer',
+                background: 'transparent',
+                border: '1px solid rgba(255, 255, 255, .16)',
+                borderRadius: '10px',
+                font: 'inherit',
+                fontWeight: '700',
+            });
+            const confirmButton = document.createElement('button');
+            confirmButton.type = 'button';
+            confirmButton.textContent = options.confirmLabel || '확인';
+            Object.assign(confirmButton.style, {
+                minWidth: '82px',
+                padding: '10px 17px',
+                color: '#fff',
+                cursor: 'pointer',
+                background: '#c64f88',
+                border: '0',
+                borderRadius: '10px',
+                font: 'inherit',
+                fontWeight: '700',
+            });
+            const finish = (confirmed) => {
+                document.removeEventListener('keydown', onKeyDown, true);
+                overlay.remove();
+                resolve(confirmed);
+            };
+            const onKeyDown = (event) => {
+                if (event.key === 'Escape') {
+                    event.preventDefault();
+                    finish(false);
+                }
+            };
+            cancelButton.addEventListener('click', () => finish(false), { once: true });
+            confirmButton.addEventListener('click', () => finish(true), { once: true });
+            document.addEventListener('keydown', onKeyDown, true);
+            header.append(icon, title);
+            body.append(message, detail);
+            footer.append(cancelButton, confirmButton);
+            panel.append(header, body, footer);
+            overlay.append(panel);
+            document.body.append(overlay);
+            cancelButton.focus();
+        }).finally(() => {
+            activeMiniDiscConfirmation = null;
+        });
+        return activeMiniDiscConfirmation;
+    }
     let activeMiniDiscDevicePicker = null;
     function chooseMiniDiscDevice(mode, candidates = []) {
         if (activeMiniDiscDevicePicker) {
@@ -857,6 +1127,7 @@ exports.CHANGELOG = [
         getMiniDiscDiagnostics,
         openWindowsDriverGuide,
         prepareMiniDiscConnection,
+        confirmMiniDiscAction,
         formatStandardMDToNetMD,
         formatStandardMDToHiMD,
         returnToModeSelection,
@@ -1530,6 +1801,7 @@ exports.CHANGELOG = [
             if (!text.includes('NetMD 모드로 연결할 수 없습니다') ||
                 (!text.includes('현재 기기는 Hi-MD') &&
                     !text.includes('현재 기기의 USB 인터페이스는 Hi-MD') &&
+                    !text.includes('현재 기기의 USB 인터페이스가 Hi-MD') &&
                     !text.includes('연결된 기기는 Hi-MD'))) {
                 continue;
             }
@@ -1540,8 +1812,9 @@ exports.CHANGELOG = [
                 while (node) {
                     const value = node.nodeValue || '';
                     if (value.includes('현재 기기는 Hi-MD') ||
-                        value.includes('현재 기기의 USB 인터페이스는 Hi-MD')) {
-                        node.nodeValue = '연결된 기기는 Hi-MD 모드입니다. 일반 MD로 사용하려면 아래의 “NetMD로 포맷” 버튼을 누르세요. 현재 Hi-MD 형식을 유지하려면 “Hi-MD로 연결”을 선택하세요. 포맷하면 디스크의 모든 데이터가 삭제됩니다.';
+                        value.includes('현재 기기의 USB 인터페이스는 Hi-MD') ||
+                        value.includes('현재 기기의 USB 인터페이스가 Hi-MD')) {
+                        node.nodeValue = '현재 USB 인터페이스가 Hi-MD 모드에 남아 있습니다. 이 표시만으로 디스크 포맷을 판단할 수는 없습니다. 일반 NetMD 포맷 미디어라면 USB 케이블을 뺐다가 다시 연결한 뒤 NetMD를 선택하세요. Hi-MD 포맷 미디어라면 “Hi-MD로 연결”을 선택하세요. 디스크를 지울 목적이 아니라면 전체 삭제 버튼은 누르지 마세요.';
                         break;
                     }
                     node = walker.nextNode();
@@ -1559,7 +1832,7 @@ exports.CHANGELOG = [
             button.type = 'button';
             button.dataset.netmdFormatButton = 'true';
             button.className = referenceButton.className;
-            button.textContent = 'NetMD로 포맷';
+            button.textContent = '전체 삭제 후 NetMD로 초기화';
             button.style.backgroundColor = '#c62828';
             button.style.color = '#fff';
             button.style.marginRight = '8px';
@@ -1570,7 +1843,7 @@ exports.CHANGELOG = [
                     const result = await formatStandardMDToNetMD();
                     if (result?.cancelled) {
                         button.disabled = false;
-                        button.textContent = 'NetMD로 포맷';
+                        button.textContent = '전체 삭제 후 NetMD로 초기화';
                         return;
                     }
                     const resultMessage = result?.message || (result?.ok ? '포맷 명령을 완료했습니다.' : '포맷에 실패했습니다.');
@@ -1586,12 +1859,12 @@ exports.CHANGELOG = [
                     }
                     window.alert(resultMessage);
                     button.disabled = false;
-                    button.textContent = 'NetMD로 포맷';
+                    button.textContent = '전체 삭제 후 NetMD로 초기화';
                 }
                 catch (error) {
                     window.alert(`NetMD 포맷 중 오류가 발생했습니다: ${error instanceof Error ? error.message : String(error)}`);
                     button.disabled = false;
-                    button.textContent = 'NetMD로 포맷';
+                    button.textContent = '전체 삭제 후 NetMD로 초기화';
                 }
             });
             referenceButton.parentElement.insertBefore(button, referenceButton);
@@ -1600,7 +1873,8 @@ exports.CHANGELOG = [
     const installHiMDFormatButton = () => {
         for (const dialog of document.querySelectorAll('[role="dialog"]')) {
             const text = dialog.textContent || '';
-            if (!text.includes('Hi-MD 모드로 연결할 수 없습니다') ||
+            if ((!text.includes('Hi-MD 모드로 연결할 수 없습니다') &&
+                !text.includes('Hi-MD USB 인터페이스를 기다리고 있습니다')) ||
                 (!text.includes('일반 MD') && !text.includes('NetMD'))) {
                 continue;
             }
@@ -1610,7 +1884,7 @@ exports.CHANGELOG = [
                 let node = walker.nextNode();
                 while (node) {
                     if ((node.nodeValue || '').includes('현재 RH10은 일반 MD')) {
-                        node.nodeValue = '연결된 기기는 일반 MD(NetMD) 모드입니다. Hi-MD로 사용하려면 아래의 “Hi-MD로 포맷” 버튼을 누르세요. 포맷하면 디스크의 모든 데이터가 삭제됩니다.';
+                        node.nodeValue = '연결된 기기는 일반 MD(NetMD) 모드입니다. Hi-MD 또는 1GB Hi-MD 전용 미디어가 들어 있다면 포맷하지 말고 USB를 다시 연결한 뒤 다시 시도하세요. 아래 포맷 기능은 지워도 되는 일반 MD를 Hi-MD 형식으로 새로 초기화하려는 경우에만 사용합니다.';
                         break;
                     }
                     node = walker.nextNode();
@@ -1628,7 +1902,7 @@ exports.CHANGELOG = [
             button.type = 'button';
             button.dataset.himdFormatButton = 'true';
             button.className = referenceButton.className;
-            button.textContent = 'Hi-MD로 포맷';
+            button.textContent = '일반 MD를 지우고 Hi-MD로 포맷';
             button.style.backgroundColor = '#c62828';
             button.style.color = '#fff';
             button.style.marginRight = '8px';
@@ -1639,7 +1913,7 @@ exports.CHANGELOG = [
                     const result = await formatStandardMDToHiMD();
                     if (result?.cancelled) {
                         button.disabled = false;
-                        button.textContent = 'Hi-MD로 포맷';
+                        button.textContent = '일반 MD를 지우고 Hi-MD로 포맷';
                         return;
                     }
                     window.alert(result?.message || (result?.ok ? 'Hi-MD 포맷 명령을 완료했습니다.' : 'Hi-MD 포맷에 실패했습니다.'));
@@ -1650,13 +1924,13 @@ exports.CHANGELOG = [
                     }
                     else {
                         button.disabled = false;
-                        button.textContent = 'Hi-MD로 포맷';
+                        button.textContent = '일반 MD를 지우고 Hi-MD로 포맷';
                     }
                 }
                 catch (error) {
                     window.alert(`Hi-MD 포맷 중 오류가 발생했습니다: ${error instanceof Error ? error.message : String(error)}`);
                     button.disabled = false;
-                    button.textContent = 'Hi-MD로 포맷';
+                    button.textContent = '일반 MD를 지우고 Hi-MD로 포맷';
                 }
             });
             referenceButton.parentElement.insertBefore(button, referenceButton);
@@ -2393,6 +2667,26 @@ exports.CHANGELOG = [
         event.stopImmediatePropagation();
         const previousBusy = target.getAttribute('aria-busy');
         const previousPointerEvents = target.style.pointerEvents;
+        const busyNotice = document.createElement('div');
+        busyNotice.textContent = mode === 'netmd'
+            ? 'NetMD USB 인터페이스로 전환 중…'
+            : 'Hi-MD USB 인터페이스로 전환 중…';
+        Object.assign(busyNotice.style, {
+            position: 'fixed',
+            left: '50%',
+            bottom: '32px',
+            transform: 'translateX(-50%)',
+            zIndex: '2147483647',
+            padding: '12px 18px',
+            border: '1px solid rgba(208, 78, 137, 0.65)',
+            borderRadius: '10px',
+            background: 'rgba(30, 29, 35, 0.96)',
+            color: '#f3f0f4',
+            fontSize: '14px',
+            boxShadow: '0 8px 24px rgba(0, 0, 0, 0.4)',
+            pointerEvents: 'none',
+        });
+        document.body.appendChild(busyNotice);
         target.setAttribute('aria-busy', 'true');
         target.style.pointerEvents = 'none';
         try {
@@ -2402,6 +2696,10 @@ exports.CHANGELOG = [
                 if (!selectedDeviceId)
                     return;
                 result = await prepareMiniDiscConnection(mode, selectedDeviceId);
+            }
+            if (result?.modeSwitchFailed && result.warning) {
+                await showMiniDiscWarning(result.warning);
+                return;
             }
             if (result?.proceed) {
                 connectionClickBypass.add(target);
@@ -2421,9 +2719,104 @@ exports.CHANGELOG = [
                 target.setAttribute('aria-busy', previousBusy);
             }
             target.style.pointerEvents = previousPointerEvents;
+            busyNotice.remove();
         }
     };
     document.addEventListener('click', interceptConnectionClick, true);
+    const resumePendingMiniDiscConnection = async () => {
+        const deadline = Date.now() + 60000;
+        let autoConnectOverlay = null;
+        try {
+            while (Date.now() < deadline) {
+                const connectionTargets = [...document.querySelectorAll('a, button, [role="button"]')]
+                    .filter((element) => !element.closest('[role="dialog"]'));
+                const netMDTarget = connectionTargets.find((element) => {
+                    const text = (element.textContent || '').replace(/\s+/g, ' ').trim();
+                    return text.includes('NetMD로 연결') || /(?:connect.*netmd|netmd.*connect)/i.test(text);
+                });
+                const hiMDTarget = connectionTargets.find((element) => {
+                    const text = (element.textContent || '').replace(/\s+/g, ' ').trim();
+                    return text.includes('Hi-MD로 연결') || /(?:connect.*hi-?md|hi-?md.*connect)/i.test(text);
+                });
+                if ((netMDTarget || hiMDTarget) && !autoConnectOverlay) {
+                    try {
+                        const pendingMode = await electron_1.ipcRenderer.invoke('peekPendingMiniDiscMode');
+                        if (pendingMode) {
+                            autoConnectOverlay = document.createElement('div');
+                            const modeName = pendingMode === 'himd' ? 'Hi-MD' : 'NetMD';
+                            autoConnectOverlay.setAttribute('aria-live', 'polite');
+                            Object.assign(autoConnectOverlay.style, {
+                                position: 'fixed',
+                                inset: '0',
+                                zIndex: '2147483646',
+                                display: 'grid',
+                                placeItems: 'center',
+                                background: 'rgba(3, 4, 8, .58)',
+                                backdropFilter: 'blur(4px)',
+                                pointerEvents: 'auto',
+                            });
+                            const message = document.createElement('div');
+                            message.textContent = `${modeName} 장치를 확인하는 중… 확인되면 자동으로 연결합니다.`;
+                            Object.assign(message.style, {
+                                padding: '15px 20px',
+                                color: '#f7f2f6',
+                                background: 'rgba(30, 29, 35, .97)',
+                                border: '1px solid rgba(208, 78, 137, .65)',
+                                borderRadius: '12px',
+                                boxShadow: '0 12px 34px rgba(0, 0, 0, .48)',
+                                fontSize: '14px',
+                                fontWeight: '700',
+                            });
+                            autoConnectOverlay.append(message);
+                            document.body.append(autoConnectOverlay);
+                        }
+                    }
+                    catch (_) { }
+                }
+                if (netMDTarget || hiMDTarget) {
+                    try {
+                        const pendingMode = await electron_1.ipcRenderer.invoke('consumePendingMiniDiscMode');
+                        const target = pendingMode === 'netmd'
+                            ? netMDTarget
+                            : pendingMode === 'himd'
+                                ? hiMDTarget
+                                : null;
+                        if (target) {
+                            const message = autoConnectOverlay?.firstElementChild;
+                            if (message) {
+                                const modeName = pendingMode === 'himd' ? 'Hi-MD' : 'NetMD';
+                                message.textContent = `${modeName} 연결 화면을 여는 중…`;
+                            }
+                            target.click();
+                            const transitionDeadline = Date.now() + 15000;
+                            while (Date.now() < transitionDeadline) {
+                                const modeCardsStillVisible = [...document.querySelectorAll('a, button, [role="button"]')]
+                                    .some((element) => {
+                                    if (element.closest('[role="dialog"]'))
+                                        return false;
+                                    const text = (element.textContent || '').replace(/\s+/g, ' ').trim();
+                                    return text.includes('NetMD로 연결') ||
+                                        text.includes('Hi-MD로 연결') ||
+                                        /(?:connect.*(?:netmd|hi-?md)|(?:netmd|hi-?md).*connect)/i.test(text);
+                                });
+                                const errorDialogVisible = Boolean(document.querySelector('.wmd-warning-overlay, [role="alertdialog"], [role="dialog"]'));
+                                if (!modeCardsStillVisible || errorDialogVisible)
+                                    break;
+                                await new Promise((resolve) => setTimeout(resolve, 100));
+                            }
+                            return;
+                        }
+                    }
+                    catch (_) { }
+                }
+                await new Promise((resolve) => setTimeout(resolve, 150));
+            }
+        }
+        finally {
+            autoConnectOverlay?.remove();
+        }
+    };
+    void resumePendingMiniDiscConnection();
     const observer = new MutationObserver(refreshKoreanUI);
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => {

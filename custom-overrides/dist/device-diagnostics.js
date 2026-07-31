@@ -52,14 +52,15 @@ function getWindowsDriverStatus(drivers, vendorId, productId) {
         return instanceId.includes(`VID_${vid}&PID_${pid}`);
     });
     const driverName = (_a = driver === null || driver === void 0 ? void 0 : driver.service) === null || _a === void 0 ? void 0 : _a.trim();
+    const driverInstanceId = driver === null || driver === void 0 ? void 0 : driver.instanceId;
     if (!driverName)
-        return { driverStatus: 'unknown' };
+        return { driverStatus: 'unknown', driverInstanceId };
     const normalized = driverName.toLowerCase();
     if (normalized === 'winusb')
-        return { driverStatus: 'winusb', driverName };
+        return { driverStatus: 'winusb', driverName, driverInstanceId };
     if (normalized === 'usbstor')
-        return { driverStatus: 'usbstor', driverName };
-    return { driverStatus: 'other', driverName };
+        return { driverStatus: 'usbstor', driverName, driverInstanceId };
+    return { driverStatus: 'other', driverName, driverInstanceId };
 }
 function describeMiniDiscDevice(vendorId, productId, windowsDrivers, transport) {
     const netMDDefinition = netmd_js_1.DevicesIds.find((entry) => entry.vendorId === vendorId && entry.deviceId === productId);

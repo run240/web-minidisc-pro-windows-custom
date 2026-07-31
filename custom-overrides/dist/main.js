@@ -57,6 +57,29 @@ function withTimeout(promise, timeoutMs, message, code = 'OPERATION_TIMEOUT') {
 function wait(milliseconds) {
     return new Promise(resolve => setTimeout(resolve, milliseconds));
 }
+let rendererWarningSequence = 0;
+function showRendererWarning(window, warning) {
+    if (window.isDestroyed())
+        return Promise.resolve();
+    const closeChannel = `miniDiscWarningClosed:${process.pid}:${Date.now()}:${rendererWarningSequence++}`;
+    return new Promise((resolve) => {
+        let settled = false;
+        const finish = () => {
+            if (settled)
+                return;
+            settled = true;
+            clearTimeout(timeout);
+            electron_1.ipcMain.removeAllListeners(closeChannel);
+            resolve();
+        };
+        const timeout = setTimeout(finish, 120000);
+        electron_1.ipcMain.once(closeChannel, finish);
+        window.webContents.send('showMiniDiscWarning', {
+            ...warning,
+            closeChannel,
+        });
+    });
+}
 electron_1.app.commandLine.appendSwitch('ignore-certificate-errors');
 function setupSettings(window) {
     const store = new electron_store_1.default();
@@ -205,21 +228,46 @@ function setupEncoder() {
     });
 }
 async function createWindow() {
+    const store = new electron_store_1.default();
+    const savedBounds = store.get('windowBounds', null);
+    const boundsAreVisible = savedBounds && electron_1.screen.getAllDisplays().some(display => {
+        const area = display.workArea;
+        const overlapWidth = Math.max(0, Math.min(savedBounds.x + savedBounds.width, area.x + area.width) - Math.max(savedBounds.x, area.x));
+        const overlapHeight = Math.max(0, Math.min(savedBounds.y + savedBounds.height, area.y + area.height) - Math.max(savedBounds.y, area.y));
+        return overlapWidth >= 100 && overlapHeight >= 100;
+    });
     const window = new electron_1.BrowserWindow({
-        width: 1280,
-        height: 900,
+        ...(boundsAreVisible ? savedBounds : { width: 1280, height: 900 }),
         icon: path_1.default.join(__dirname, '..', 'res', 'icon.png'),
         webPreferences: {
             nodeIntegration: false,
             preload: path_1.default.join(__dirname, 'preload.js'),
         },
     });
+    if (store.get('windowMaximized', false))
+        window.maximize();
+    let saveBoundsTimer;
+    const saveWindowPlacement = () => {
+        if (window.isDestroyed() || window.isMinimized())
+            return;
+        store.set('windowBounds', window.getNormalBounds());
+        store.set('windowMaximized', window.isMaximized());
+    };
+    const scheduleWindowPlacementSave = () => {
+        if (saveBoundsTimer)
+            clearTimeout(saveBoundsTimer);
+        saveBoundsTimer = setTimeout(saveWindowPlacement, 250);
+    };
+    window.on('move', scheduleWindowPlacementSave);
+    window.on('resize', scheduleWindowPlacementSave);
+    window.on('maximize', scheduleWindowPlacementSave);
+    window.on('unmaximize', scheduleWindowPlacementSave);
+    window.on('close', saveWindowPlacement);
     console.log(electron_1.app.getPath('exe'));
     await integrate(window);
     window.setMenuBarVisibility(false);
     await window.loadURL('file://' + getOfRenderer('index.html')); //Can't use the `sandbox://` protocol - index.html would (incorrectly) redirect to https
     window.setTitle('Web MiniDisc Pro');
-    const store = new electron_store_1.default();
     window.setMenuBarVisibility(false);
     window.webContents.session.on('will-download', async (event, item, contents) => {
         let downloadPath = store.get('downloadPath', '');
@@ -289,7 +337,7 @@ function traverseObject(window, objectFactory, namespace) {
                 if (shouldTimeOutHiMD) {
                     result = await withTimeout(operation, n === 'applyEditBatch' ? 60000 : 30000, n === 'applyEditBatch'
                         ? 'Hi-MD 편집 적용과 검증 시간이 초과되었습니다. 장치를 분리하지 말고 잠시 기다린 뒤, 앱이 복구되지 않으면 USB를 다시 연결해 주세요.'
-                        : 'Hi-MD 디스크 응답 시간이 초과되었습니다. 일반 MD가 들어 있다면 USB를 다시 연결한 뒤 NetMD를 선택해 주세요.', 'HIMD_TIMEOUT');
+                        : 'Hi-MD 파일시스템을 찾지 못했습니다. 일반 NetMD 포맷 미디어라면 USB 인터페이스가 Hi-MD 모드에 남아 있는 상태일 수 있습니다.', 'HIMD_TIMEOUT');
                 }
                 else if (shouldTimeOutNetMD) {
                     result = await withTimeout(operation, isForcedTOCReload ? 20000 : 15000, isForcedTOCReload
@@ -306,48 +354,42 @@ function traverseObject(window, objectFactory, namespace) {
                 console.log(err);
                 if (err?.code === 'HIMD_TIMEOUT' && !hiMDRecoveryPending) {
                     hiMDRecoveryPending = true;
-                    Promise.resolve().then(async () => {
-                        try {
-                            await withTimeout(targetObject.finalize(), 4000, 'Hi-MD 연결 정리 시간 초과');
-                        }
-                        catch (cleanupError) {
-                            console.log('Timed-out Hi-MD connection cleanup failed:', cleanupError);
-                        }
-                        await electron_1.dialog.showMessageBox(window, {
-                            type: 'warning',
-                            title: 'Hi-MD 연결 시간이 초과되었습니다',
-                            message: '기기가 Hi-MD 디스크로 응답하지 않아 모드 선택 화면으로 돌아갑니다.',
-                            detail: '일반 MD가 들어 있다면 USB 케이블을 한 번 분리했다가 다시 연결한 뒤 NetMD를 선택해 주세요.',
-                            buttons: ['확인'],
-                        });
-                        if (!window.isDestroyed())
-                            window.webContents.reload();
-                        hiMDRecoveryPending = false;
+                    try {
+                        await withTimeout(targetObject.finalize(), 4000, 'Hi-MD 연결 정리 시간 초과');
+                    }
+                    catch (cleanupError) {
+                        console.log('Timed-out Hi-MD connection cleanup failed:', cleanupError);
+                    }
+                    await showRendererWarning(window, {
+                        title: 'Hi-MD 연결 시간이 초과되었습니다',
+                        message: '현재 미디어에서 Hi-MD 파일시스템을 찾지 못해 모드 선택 화면으로 돌아갑니다.',
+                        detail: '일반 NetMD 포맷 미디어가 들어 있다면 RH1의 USB 인터페이스만 Hi-MD 모드에 남아 있는 상태입니다. 일반 미디어라면 NetMD를 선택하고, Hi-MD 포맷이 확실하다면 미디어 장착을 확인한 뒤 다시 시도하세요.',
                     });
+                    if (!window.isDestroyed())
+                        window.webContents.reload();
+                    hiMDRecoveryPending = false;
+                    return [null, null];
                 }
                 if (err?.code === 'NETMD_TIMEOUT' && !netMDRecoveryPending) {
                     netMDRecoveryPending = true;
-                    Promise.resolve().then(async () => {
-                        try {
-                            const stalledInterface = targetObject.netmdInterface;
-                            targetObject.netmdInterface = undefined;
-                            targetObject.dropCachedContentList?.();
-                            await withTimeout(Promise.resolve(stalledInterface?.netMd?.finalize()), 3000, 'NetMD 연결 정리 시간 초과');
-                        }
-                        catch (cleanupError) {
-                            console.log('Timed-out NetMD connection cleanup failed:', cleanupError);
-                        }
-                        await electron_1.dialog.showMessageBox(window, {
-                            type: 'warning',
-                            title: 'NetMD 연결 시간이 초과되었습니다',
-                            message: '기기가 연결 요청에 응답하지 않아 모드 선택 화면으로 돌아갑니다.',
-                            detail: 'USB 케이블을 한 번 분리했다가 다시 연결한 뒤 NetMD를 선택해 주세요.',
-                            buttons: ['확인'],
-                        });
-                        if (!window.isDestroyed())
-                            window.webContents.reload();
-                        netMDRecoveryPending = false;
+                    try {
+                        const stalledInterface = targetObject.netmdInterface;
+                        targetObject.netmdInterface = undefined;
+                        targetObject.dropCachedContentList?.();
+                        await withTimeout(Promise.resolve(stalledInterface?.netMd?.finalize()), 3000, 'NetMD 연결 정리 시간 초과');
+                    }
+                    catch (cleanupError) {
+                        console.log('Timed-out NetMD connection cleanup failed:', cleanupError);
+                    }
+                    await showRendererWarning(window, {
+                        title: 'NetMD 연결 시간이 초과되었습니다',
+                        message: '기기가 연결 요청에 응답하지 않아 모드 선택 화면으로 돌아갑니다.',
+                        detail: '장치를 잠시 기다린 뒤 NetMD 연결을 다시 시도해 주세요.',
                     });
+                    if (!window.isDestroyed())
+                        window.webContents.reload();
+                    netMDRecoveryPending = false;
+                    return [null, null];
                 }
                 return [null, err];
             }
@@ -396,6 +438,299 @@ async function integrate(window) {
         ].join('\n'),
         buttons: ['확인'],
     }));
+    const modeSwitchStore = new electron_store_1.default({ name: 'minidisc-mode-switch' });
+    const rememberPendingMiniDiscMode = (mode) => {
+        modeSwitchStore.set('pending', {
+            mode,
+            createdAt: Date.now(),
+            creatorPid: process.pid,
+        });
+    };
+    const clearPendingMiniDiscMode = () => modeSwitchStore.delete('pending');
+    electron_1.ipcMain.handle('consumePendingMiniDiscMode', () => {
+        const pending = modeSwitchStore.get('pending', null);
+        if (!pending ||
+            (pending.mode !== 'netmd' && pending.mode !== 'himd') ||
+            typeof pending.createdAt !== 'number' ||
+            Date.now() - pending.createdAt > 60000) {
+            clearPendingMiniDiscMode();
+            return null;
+        }
+        // Do not feed the request back to the process that initiated it.
+        // A relaunched app has a new PID and may consume it once.
+        if (pending.creatorPid === process.pid)
+            return null;
+        const diagnostics = (0, device_diagnostics_1.getMiniDiscDiagnostics)();
+        const ready = diagnostics.devices.some((device) => device.mode === pending.mode);
+        if (!ready)
+            return null;
+        clearPendingMiniDiscMode();
+        return pending.mode;
+    });
+    electron_1.ipcMain.handle('peekPendingMiniDiscMode', () => {
+        const pending = modeSwitchStore.get('pending', null);
+        if (!pending ||
+            (pending.mode !== 'netmd' && pending.mode !== 'himd') ||
+            typeof pending.createdAt !== 'number' ||
+            Date.now() - pending.createdAt > 60000) {
+            clearPendingMiniDiscMode();
+            return null;
+        }
+        return pending.creatorPid === process.pid ? null : pending.mode;
+    });
+    const switchHiMDInterfaceToNetMD = async (device) => {
+        if (!device?.supportsHiMD || device.driverStatus !== 'winusb') {
+            return { ok: false, message: '전환할 Hi-MD WinUSB 인터페이스를 찾지 못했습니다.' };
+        }
+        webusb.setPreferredDevice(device);
+        let driver;
+        let commandError;
+        try {
+            if (himdService.fsDriver || himdService.himd) {
+                try {
+                    await withTimeout(himdService.finalize(), 4000, '이전 Hi-MD 연결 정리 시간이 초과되었습니다.');
+                }
+                catch (cleanupError) {
+                    console.log('Previous Hi-MD interface cleanup failed:', cleanupError);
+                }
+            }
+            const paired = await withTimeout(himdService.pair(), 10000, `${device.modelHint}의 Hi-MD USB 인터페이스를 여는 시간이 초과되었습니다.`);
+            if (!paired || !himdService.fsDriver?.driver) {
+                return { ok: false, message: `${device.modelHint}의 Hi-MD USB 인터페이스를 열지 못했습니다.` };
+            }
+            driver = himdService.fsDriver.driver;
+            await withTimeout(driver.init(), 10000, 'Hi-MD USB 명령 인터페이스 준비 시간이 초과되었습니다.');
+            const switchCommand = new Uint8Array([
+                0xc2, 0x00, 0x00, 0x10, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            ]);
+            rememberPendingMiniDiscMode('netmd');
+            try {
+                await withTimeout(driver.sendCommandInGetResult(switchCommand, 0, true, switchCommand.length), 10000, 'NetMD 인터페이스 전환 명령 시간이 초과되었습니다.');
+            }
+            catch (error) {
+                // Switching interfaces disconnects the old Hi-MD USB handle before
+                // the command status can be returned, so a USB error is expected.
+                commandError = error;
+                console.log('Hi-MD to NetMD interface switch disconnected the old handle:', error);
+            }
+            for (let attempt = 0; attempt < 24; attempt++) {
+                await wait(500);
+                const refreshed = (0, device_diagnostics_1.getMiniDiscDiagnostics)();
+                const switched = refreshed.devices.find((candidate) => candidate.mode === 'netmd');
+                if (switched) {
+                    webusb.setPreferredDevice(switched);
+                    return {
+                        ok: true,
+                        message: `${switched.modelHint}이(가) NetMD USB 모드(${switched.vendorIdHex}:${switched.productIdHex})로 전환되었습니다.`,
+                        device: switched,
+                    };
+                }
+            }
+            return {
+                ok: false,
+                message: commandError
+                    ? `NetMD 인터페이스 전환 명령 후 장치가 다시 나타나지 않았습니다: ${commandError instanceof Error ? commandError.message : String(commandError)}`
+                    : 'NetMD 인터페이스 전환 명령은 완료됐지만 장치가 NetMD USB 모드로 다시 나타나지 않았습니다.',
+            };
+        }
+        catch (error) {
+            clearPendingMiniDiscMode();
+            return {
+                ok: false,
+                message: `NetMD 인터페이스 전환 중 오류가 발생했습니다: ${error instanceof Error ? error.message : String(error)}`,
+            };
+        }
+        finally {
+            himdService.fsDriver = undefined;
+            himdService.himd = undefined;
+            himdService.cachedDisc = undefined;
+            himdService.session = null;
+            if (driver) {
+                Promise.resolve(driver.close()).catch(() => { });
+            }
+        }
+    };
+    const hiMDProductsByNetMDProduct = new Map([
+        [0x017e, [0x017f]],
+        [0x0180, [0x0181]],
+        [0x0182, [0x0183]],
+        [0x0184, [0x0185]],
+        [0x0186, [0x0187]],
+        [0x0219, [0x021a]],
+        [0x021b, [0x021c]],
+        [0x021d, [0x022d]],
+        [0x022c, [0x022d]],
+        [0x0286, [0x0287]],
+    ]);
+    const switchNetMDInterfaceToHiMD = async (device) => {
+        const expectedProducts = hiMDProductsByNetMDProduct.get(device?.productId);
+        if (!device?.supportsNetMD || device.driverStatus !== 'winusb' || !expectedProducts) {
+            return { ok: false, message: 'Hi-MD 전환을 지원하는 NetMD WinUSB 인터페이스를 찾지 못했습니다.' };
+        }
+        webusb.setPreferredDevice(device);
+        let openedInterface;
+        let commandError;
+        try {
+            if (service.netmdInterface) {
+                try {
+                    await withTimeout(service.finalize(), 4000, '이전 NetMD 연결 정리 시간이 초과되었습니다.');
+                }
+                catch (cleanupError) {
+                    console.log('Previous NetMD interface cleanup failed:', cleanupError);
+                }
+            }
+            const paired = await withTimeout(service.pair(), 12000, `${device.modelHint}의 NetMD USB 인터페이스를 여는 시간이 초과되었습니다.`);
+            if (!paired || !service.netmdInterface) {
+                return { ok: false, message: `${device.modelHint}의 NetMD USB 인터페이스를 열지 못했습니다.` };
+            }
+            openedInterface = service.netmdInterface;
+            const openedDevice = openedInterface.netMd;
+            if (openedDevice.getVendor() !== device.vendorId || openedDevice.getProduct() !== device.productId) {
+                return { ok: false, message: '선택한 기기와 실제 열린 기기가 달라 인터페이스 전환을 중단했습니다.' };
+            }
+            try {
+                // This is only the interface switch. Unlike formatToHiMD(),
+                // it does not call eraseDisc() and does not modify media data.
+                rememberPendingMiniDiscMode('himd');
+                await withTimeout(openedInterface.enterHiMDMode(), 10000, 'Hi-MD 인터페이스 전환 명령 시간이 초과되었습니다.');
+            }
+            catch (error) {
+                // A successful mode change normally disconnects the NetMD handle
+                // before the command response is returned.
+                commandError = error;
+                console.log('NetMD to Hi-MD interface switch disconnected the old handle:', error);
+            }
+            for (let attempt = 0; attempt < 24; attempt++) {
+                await wait(500);
+                const refreshed = (0, device_diagnostics_1.getMiniDiscDiagnostics)();
+                const switched = refreshed.devices.find((candidate) => candidate.vendorId === device.vendorId &&
+                    expectedProducts.includes(candidate.productId));
+                if (switched) {
+                    webusb.setPreferredDevice(switched);
+                    return {
+                        ok: true,
+                        message: `${switched.modelHint}이(가) Hi-MD USB 모드(${switched.vendorIdHex}:${switched.productIdHex})로 전환되었습니다.`,
+                        device: switched,
+                    };
+                }
+            }
+            return {
+                ok: false,
+                message: commandError
+                    ? `Hi-MD 인터페이스 전환 명령 후 장치가 다시 나타나지 않았습니다: ${commandError instanceof Error ? commandError.message : String(commandError)}`
+                    : 'Hi-MD 인터페이스 전환 명령은 완료됐지만 장치가 Hi-MD USB 모드로 다시 나타나지 않았습니다.',
+            };
+        }
+        catch (error) {
+            clearPendingMiniDiscMode();
+            return {
+                ok: false,
+                message: `Hi-MD 인터페이스 전환 중 오류가 발생했습니다: ${error instanceof Error ? error.message : String(error)}`,
+            };
+        }
+        finally {
+            service.netmdInterface = undefined;
+            service.dropCachedContentList();
+            if (openedInterface) {
+                Promise.resolve(openedInterface.netMd.finalize()).catch(() => { });
+            }
+        }
+    };
+    const restartMiniDiscUsbInterface = async (requestedMode, askConfirmation = true) => {
+        if (process.platform !== 'win32') {
+            return { ok: false, message: 'USB 모드 자동 전환은 Windows 전용입니다.' };
+        }
+        if (requestedMode !== 'netmd' && requestedMode !== 'himd') {
+            return { ok: false, message: '알 수 없는 MiniDisc 연결 모드입니다.' };
+        }
+        const diagnostics = (0, device_diagnostics_1.getMiniDiscDiagnostics)();
+        const device = diagnostics.devices.find((candidate) => candidate.mode !== requestedMode) ||
+            diagnostics.devices[0];
+        if (!device?.driverInstanceId) {
+            return { ok: false, message: '다시 시작할 MiniDisc USB 장치 인스턴스를 찾지 못했습니다.' };
+        }
+        const modeName = requestedMode === 'netmd' ? 'NetMD' : 'Hi-MD';
+        if (askConfirmation) {
+            const confirmation = await electron_1.dialog.showMessageBox(window, {
+                type: 'question',
+                title: 'USB 모드 자동 전환',
+                message: `${device.modelHint}의 USB 인터페이스를 다시 시작할까요?`,
+                detail: [
+                    `현재 USB ID: ${device.vendorIdHex}:${device.productIdHex}`,
+                    `목표 모드: ${modeName}`,
+                    '',
+                    'Windows 장치만 소프트웨어로 다시 시작하며 디스크 데이터는 변경하지 않습니다.',
+                    '관리자 권한 확인 창이 나타나면 허용해 주세요.',
+                ].join('\n'),
+                buttons: ['취소', '다시 시작'],
+                defaultId: 1,
+                cancelId: 0,
+                noLink: true,
+            });
+            if (confirmation.response === 0) {
+                return { ok: false, cancelled: true };
+            }
+        }
+        const quotePowerShell = (value) => `'${String(value).replace(/'/g, "''")}'`;
+        const powerShellScript = [
+            '$ErrorActionPreference = "Stop"',
+            `$process = Start-Process -FilePath 'pnputil.exe' -ArgumentList @('/restart-device', ${quotePowerShell(device.driverInstanceId)}) -Verb RunAs -WindowStyle Hidden -Wait -PassThru`,
+            'exit $process.ExitCode',
+        ].join('\r\n');
+        const encodedScript = Buffer.from(powerShellScript, 'utf16le').toString('base64');
+        try {
+            const exitCode = await new Promise((resolve, reject) => {
+                const child = (0, child_process_1.spawn)('powershell.exe', [
+                    '-NoProfile',
+                    '-NonInteractive',
+                    '-EncodedCommand',
+                    encodedScript,
+                ], { windowsHide: true, stdio: 'ignore' });
+                const timeout = setTimeout(() => {
+                    try {
+                        child.kill();
+                    }
+                    catch (_) { }
+                    reject(new Error('Windows 장치 다시 시작 시간이 초과되었습니다.'));
+                }, 60000);
+                child.once('error', (error) => {
+                    clearTimeout(timeout);
+                    reject(error);
+                });
+                child.once('exit', (code) => {
+                    clearTimeout(timeout);
+                    resolve(code ?? -1);
+                });
+            });
+            if (exitCode !== 0) {
+                return { ok: false, message: `Windows가 장치 다시 시작을 완료하지 못했습니다. 종료 코드: ${exitCode}` };
+            }
+            for (let attempt = 0; attempt < 16; attempt++) {
+                await wait(500);
+                const refreshed = (0, device_diagnostics_1.getMiniDiscDiagnostics)();
+                const switched = refreshed.devices.find((candidate) => candidate.mode === requestedMode);
+                if (switched) {
+                    webusb.setPreferredDevice(switched);
+                    return {
+                        ok: true,
+                        message: `${switched.modelHint}이(가) ${modeName} USB 모드(${switched.vendorIdHex}:${switched.productIdHex})로 다시 연결되었습니다.`,
+                        device: switched,
+                    };
+                }
+            }
+            return {
+                ok: false,
+                message: `장치는 다시 시작했지만 ${modeName} USB 모드로 바뀌지 않았습니다. 이 기기에서는 한 번의 물리적 USB 재연결이 필요할 수 있습니다.`,
+            };
+        }
+        catch (error) {
+            return {
+                ok: false,
+                message: `USB 장치 다시 시작 중 오류가 발생했습니다: ${error instanceof Error ? error.message : String(error)}`,
+            };
+        }
+    };
+    electron_1.ipcMain.handle('restartMiniDiscUsbInterface', (_, requestedMode) => restartMiniDiscUsbInterface(requestedMode, true));
     electron_1.ipcMain.handle('prepareMiniDiscConnection', async (_, requestedMode, selectedDeviceId) => {
         if (process.platform !== 'win32') {
             return { proceed: true };
@@ -403,14 +738,42 @@ async function integrate(window) {
         if (requestedMode !== 'netmd' && requestedMode !== 'himd') {
             return { proceed: false, message: '알 수 없는 MiniDisc 연결 모드입니다.' };
         }
-        const diagnostics = (0, device_diagnostics_1.getMiniDiscDiagnostics)();
+        // RH1-class devices need a short settling period after a physical
+        // media change. Opening the mass-storage interface too early can
+        // leave the first Hi-MD attempt waiting until its timeout.
+        if (requestedMode === 'himd') {
+            await wait(1500);
+        }
+        let diagnostics = (0, device_diagnostics_1.getMiniDiscDiagnostics)();
         let candidates = diagnostics.devices.filter((device) => requestedMode === 'netmd' ? device.supportsNetMD : device.supportsHiMD);
-        let usingHiMDBridgeForNetMD = false;
-        if (requestedMode === 'netmd' && candidates.length === 0) {
-            const hiMDCandidates = diagnostics.devices.filter((device) => device.supportsHiMD);
-            if (hiMDCandidates.length > 0) {
-                candidates = hiMDCandidates;
-                usingHiMDBridgeForNetMD = true;
+        if (candidates.length === 0 && diagnostics.devices.length > 0) {
+            const hiMDDevice = requestedMode === 'netmd'
+                ? diagnostics.devices.find((device) => device.supportsHiMD && device.mode === 'himd')
+                : undefined;
+            const netMDDevice = requestedMode === 'himd'
+                ? diagnostics.devices.find((device) => device.supportsNetMD &&
+                    device.mode === 'netmd' &&
+                    hiMDProductsByNetMDProduct.has(device.productId))
+                : undefined;
+            const restartResult = hiMDDevice
+                ? await switchHiMDInterfaceToNetMD(hiMDDevice)
+                : netMDDevice
+                    ? await switchNetMDInterfaceToHiMD(netMDDevice)
+                    : await restartMiniDiscUsbInterface(requestedMode, false);
+            if (restartResult.ok) {
+                diagnostics = (0, device_diagnostics_1.getMiniDiscDiagnostics)();
+                candidates = diagnostics.devices.filter((device) => requestedMode === 'netmd' ? device.supportsNetMD : device.supportsHiMD);
+            }
+            else {
+                return {
+                    proceed: false,
+                    modeSwitchFailed: true,
+                    warning: {
+                        title: 'USB 모드 자동 전환 실패',
+                        message: restartResult.message || 'MiniDisc USB 모드를 자동으로 전환하지 못했습니다.',
+                        detail: '디스크 데이터는 변경되지 않았습니다. 잠시 기다린 뒤 같은 연결 버튼을 다시 눌러보세요.',
+                    },
+                };
             }
         }
         if (candidates.length === 0) {
@@ -452,9 +815,7 @@ async function integrate(window) {
         if (device.driverStatus === 'winusb') {
             return { proceed: true, device };
         }
-        const modeName = usingHiMDBridgeForNetMD
-            ? 'NetMD 변환 준비'
-            : requestedMode === 'netmd' ? 'NetMD' : 'Hi-MD';
+        const modeName = requestedMode === 'netmd' ? 'NetMD' : 'Hi-MD';
         const currentDriver = device.driverName || {
             usbstor: 'USBSTOR',
             unknown: '확인되지 않음',
