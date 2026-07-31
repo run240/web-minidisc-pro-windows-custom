@@ -51,7 +51,10 @@ function patchGeneratedHiMDService() {
     'interfaces',
     'himd.ts',
   );
-  let text = readFileSync(destination, 'utf8');
+  // GitHub's Windows runners may check out the generated source with CRLF
+  // line endings. Normalize before matching the reviewed LF patch blocks so
+  // the build is reproducible regardless of Git's autocrlf setting.
+  let text = readFileSync(destination, 'utf8').replace(/\r\n?/g, '\n');
   const pairBefore = `    async pair() {
         const device = await navigator.usb.requestDevice({ filters: DevicesIds });`;
   const pairAfter = `    async pair() {
