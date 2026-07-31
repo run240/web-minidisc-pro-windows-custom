@@ -2,6 +2,7 @@
 /node_modules
 /build
 /build-*/
+/test-distribution/*.zip
 /renderer
 extras/wmdp-driver-helper.exe
 extras/LIBWDI-SOURCE-v1.5.1-wmdp.zip

@@ -26,6 +26,11 @@ Free code signing provided by
 - Automatic mode reconnection after the application restarts
 - Multiple connected-device selection
 - Korean UI and filename romanization improvements
+- MD Squirrel assistant for creating English-tagged copies of local audio
+- Apple Music (US) metadata lookup for English track and artist names, with
+  duration-aware candidates and a manual web-search fallback
+- Original audio preservation: copies are written to a sibling `[English]`
+  folder without re-encoding
 - Hi-MD and NetMD temporary metadata editing
 - Hi-MD connection-state cleanup and safer timeout recovery
 - Transfer-stall diagnostics and troubleshooting information

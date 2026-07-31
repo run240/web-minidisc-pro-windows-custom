@@ -1571,6 +1571,7 @@ async function integrate(window) {
     electron_1.ipcMain.handle("openFileHostDialog", async (_, filters, directory) => {
         return ewmdOpenDialog(window, filters, directory);
     });
+    require("./md-squirrel-main").setupMDSquirrelIPC(window);
     setupSettings(window);
     setupEncoder();
     // On a USB disconnect event, enumerate services, check if any was connected

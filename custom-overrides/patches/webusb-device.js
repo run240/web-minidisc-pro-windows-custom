@@ -20,6 +20,10 @@ class WebUSBDevice {
     constructor(device, autoDetachKernelDriver) {
         this.device = device;
         this.autoDetachKernelDriver = autoDetachKernelDriver;
+        // node-usb defaults control transfers to only one second. Some older
+        // NetMD units need longer while waking up or reading a newly inserted
+        // disc, even though the USB connection itself is healthy.
+        this.device.timeout = Math.max(this.device.timeout, 3000);
         this.manufacturerName = null;
         this.productName = null;
         this.serialNumber = null;
@@ -178,27 +182,33 @@ class WebUSBDevice {
         }
     }
     async controlTransferIn(setup, length) {
-        try {
-            this.checkDeviceOpen();
-            const type = this.controlTransferParamsToType(setup, usb.LIBUSB_ENDPOINT_IN);
-            const result = await this.controlTransferAsync(type, setup.request, setup.value, setup.index, length);
-            return {
-                data: result ? new DataView(new Uint8Array(result).buffer) : undefined,
-                status: 'ok'
-            };
-        }
-        catch (error) {
-            if (error.errno === usb.LIBUSB_TRANSFER_STALL) {
+        this.checkDeviceOpen();
+        const type = this.controlTransferParamsToType(setup, usb.LIBUSB_ENDPOINT_IN);
+        for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+                const result = await this.controlTransferAsync(type, setup.request, setup.value, setup.index, length);
                 return {
-                    status: 'stall'
+                    data: result ? new DataView(new Uint8Array(result).buffer) : undefined,
+                    status: 'ok'
                 };
             }
-            if (error.errno === usb.LIBUSB_TRANSFER_OVERFLOW) {
-                return {
-                    status: 'babble'
-                };
+            catch (error) {
+                if (error.errno === usb.LIBUSB_TRANSFER_TIMED_OUT && attempt === 0) {
+                    await new Promise(resolve => setTimeout(resolve, 250));
+                    continue;
+                }
+                if (error.errno === usb.LIBUSB_TRANSFER_STALL) {
+                    return {
+                        status: 'stall'
+                    };
+                }
+                if (error.errno === usb.LIBUSB_TRANSFER_OVERFLOW) {
+                    return {
+                        status: 'babble'
+                    };
+                }
+                throw new Error(`controlTransferIn error: ${error}`);
             }
-            throw new Error(`controlTransferIn error: ${error}`);
         }
     }
     async controlTransferOut(setup, data) {

@@ -2817,6 +2817,9 @@ exports.CHANGELOG = [
         }
     };
     void resumePendingMiniDiscConnection();
+    // MD Squirrel stays isolated from the React tree. The launcher is shown
+    // only on the mode-selection screen and opens a self-contained modal.
+    require("./md-squirrel-preload").install();
     const observer = new MutationObserver(refreshKoreanUI);
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => {

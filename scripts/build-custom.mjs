@@ -28,6 +28,23 @@ function copy(source, destination) {
   cpSync(source, destination, { recursive: true, force: true });
 }
 
+function inlineMDSquirrelPreload() {
+  const preloadPath = join(root, 'dist', 'preload.js');
+  const modulePath = join(root, 'custom-overrides', 'dist', 'md-squirrel-preload.js');
+  const marker = 'require("./md-squirrel-preload").install();';
+  let preload = readFileSync(preloadPath, 'utf8');
+  if (!preload.includes(marker)) {
+    throw new Error('The MD Squirrel preload marker is missing.');
+  }
+  let moduleSource = readFileSync(modulePath, 'utf8')
+    .replace(/^"use strict";\s*/u, '')
+    .replace(/^const \{ ipcRenderer \} = require\("electron"\);\s*/u, '')
+    .replace(/\s*module\.exports = \{ install \};\s*$/u, '');
+  moduleSource = `{\nconst ipcRenderer = electron_1.ipcRenderer;\n${moduleSource}\ninstall();\n}`;
+  preload = preload.replace(marker, moduleSource);
+  writeFileSync(preloadPath, preload, 'utf8');
+}
+
 function patchInterface(sourceName) {
   const source = join(root, 'webminidisc', 'src', 'services', 'interfaces', sourceName);
   const destination = join(root, 'src', 'wmd', 'original', 'services', 'interfaces', sourceName);
@@ -104,6 +121,10 @@ run(process.execPath, [
 run(npx, ['tsc']);
 
 copy(join(root, 'custom-overrides', 'dist'), join(root, 'dist'));
+// Electron's sandboxed preload can only require a small allow-list of modules.
+// Inline the reviewed MD Squirrel UI module so it can share the existing
+// ipcRenderer reference without enabling Node integration in the renderer.
+inlineMDSquirrelPreload();
 // The customized renderer is a complete, reviewed build artifact. Building
 // the upstream submodule first would only be overwritten here and also makes
 // the Windows build depend on the upstream submodule's stale package lock.
