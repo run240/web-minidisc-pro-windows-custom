@@ -2362,11 +2362,21 @@ exports.CHANGELOG = [
     };
     const buildMDTransferDiagnostics = async (snapshot) => {
         let devices = [];
+        let deviceFallback = 'USB 장치 정보를 읽지 못했습니다.';
         try {
-            devices = (await getMiniDiscDiagnostics())?.devices || [];
+            const diagnostics = await Promise.race([
+                getMiniDiscDiagnostics().then(value => ({ status: 'complete', value })),
+                new Promise(resolve => setTimeout(() => resolve({ status: 'timeout' }), 1500)),
+            ]);
+            if (diagnostics.status === 'timeout') {
+                deviceFallback = 'USB 장치 진단 시간이 초과되었습니다. 전송 화면 정보만 복사했습니다.';
+            }
+            else {
+                devices = diagnostics.value?.devices || [];
+            }
         }
         catch (_) {
-            // The stalled transfer itself is more important than an optional device scan.
+            deviceFallback = 'USB 장치 진단에 실패했습니다. 전송 화면 정보만 복사했습니다.';
         }
         const deviceLines = devices.length > 0
             ? devices.map(device => [
@@ -2376,7 +2386,7 @@ exports.CHANGELOG = [
                 device.mode,
                 device.driverName || device.driverStatus,
             ].join(' · '))
-            : ['USB 장치 정보를 읽지 못했습니다.'];
+            : [deviceFallback];
         return [
             'Web MiniDisc Pro · MD 전송 정지 진단',
             `시각: ${new Date().toLocaleString()}`,
