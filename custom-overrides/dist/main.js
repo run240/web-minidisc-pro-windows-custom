@@ -897,12 +897,35 @@ async function integrate(window) {
             '}',
         ].join('\r\n');
         const encodedPowerShellScript = Buffer.from(powerShellScript, 'utf16le').toString('base64');
+        const targetVid = device.vendorId.toString(16).padStart(4, '0').toUpperCase();
+        const targetPid = device.productId.toString(16).padStart(4, '0').toUpperCase();
+        const targetPnpPattern = `USB\\VID_${targetVid}&PID_${targetPid}*`;
+        const probeDriverScript = [
+            "$ErrorActionPreference = 'SilentlyContinue'",
+            `$device = Get-CimInstance Win32_PnPEntity | Where-Object { $_.PNPDeviceID -like ${quotePowerShell(targetPnpPattern)} } | Select-Object -First 1`,
+            "if ($null -ne $device) { [Console]::Out.Write([string]$device.Service) }",
+        ].join('; ');
+        const probeTargetWinUsb = () => new Promise(resolve => {
+            (0, child_process_1.execFile)('powershell.exe', [
+                '-NoProfile',
+                '-NonInteractive',
+                '-ExecutionPolicy', 'Bypass',
+                '-Command', probeDriverScript,
+            ], {
+                encoding: 'utf8',
+                timeout: 7000,
+                windowsHide: true,
+            }, (error, stdout) => {
+                resolve(!error && String(stdout || '').trim().toLowerCase() === 'winusb');
+            });
+        });
         let powerShellExitCode = -1;
         let installerTimedOut = false;
+        let driverDetectedWhileInstalling = false;
         publishDriverInstallStatus({
             phase: 'installing',
             startedAt: Date.now(),
-            timeoutMs: 180000,
+            timeoutMs: 135000,
         });
         try {
             const installerProcessResult = await new Promise((resolve, reject) => {
@@ -916,13 +939,29 @@ async function integrate(window) {
                     stdio: 'ignore',
                 });
                 let settled = false;
+                let probeTimer;
                 const finish = (result) => {
                     if (settled)
                         return;
                     settled = true;
                     clearTimeout(timeout);
+                    if (probeTimer)
+                        clearTimeout(probeTimer);
                     resolve(result);
                 };
+                const pollDriver = async () => {
+                    if (settled)
+                        return;
+                    const detected = await probeTargetWinUsb();
+                    if (settled)
+                        return;
+                    if (detected) {
+                        finish({ code: 0, timedOut: false, driverDetected: true });
+                        return;
+                    }
+                    probeTimer = setTimeout(pollDriver, 2500);
+                };
+                probeTimer = setTimeout(pollDriver, 1500);
                 const timeout = setTimeout(() => {
                     try {
                         child.kill();
@@ -930,19 +969,22 @@ async function integrate(window) {
                     catch (_) {
                         // The elevated helper has its own timeout and may already be exiting.
                     }
-                    finish({ code: -1, timedOut: true });
-                }, 180000);
+                    finish({ code: -1, timedOut: true, driverDetected: false });
+                }, 135000);
                 child.once('error', (error) => {
                     if (settled)
                         return;
                     settled = true;
                     clearTimeout(timeout);
+                    if (probeTimer)
+                        clearTimeout(probeTimer);
                     reject(error);
                 });
-                child.once('exit', (code) => finish({ code: code ?? -1, timedOut: false }));
+                child.once('exit', (code) => finish({ code: code ?? -1, timedOut: false, driverDetected: false }));
             });
             powerShellExitCode = installerProcessResult.code;
             installerTimedOut = installerProcessResult.timedOut;
+            driverDetectedWhileInstalling = installerProcessResult.driverDetected;
         }
         catch (error) {
             publishDriverInstallStatus({ phase: 'close' });
@@ -955,6 +997,25 @@ async function integrate(window) {
             });
             return { proceed: false, installerFailed: true };
         }
+        if (driverDetectedWhileInstalling) {
+            publishDriverInstallStatus({ phase: 'verifying' });
+            const refreshedDiagnostics = (0, device_diagnostics_1.getMiniDiscDiagnostics)();
+            const refreshedDevice = refreshedDiagnostics.devices.find((candidate) => candidate.vendorId === device.vendorId &&
+                candidate.productId === device.productId);
+            const installedDevice = refreshedDevice?.driverStatus === 'winusb'
+                ? refreshedDevice
+                : { ...device, driverStatus: 'winusb', driverName: 'WinUSB' };
+            webusb.setPreferredDevice(installedDevice);
+            publishDriverInstallStatus({ phase: 'close' });
+            await electron_1.dialog.showMessageBox(window, {
+                type: 'info',
+                title: 'WinUSB 설치 완료',
+                message: `${device.modelHint}의 WinUSB 드라이버를 확인했습니다.`,
+                detail: '설치 도우미가 닫히기를 기다리지 않고 연결을 계속합니다.',
+                buttons: ['확인'],
+            });
+            return { proceed: true, installed: true, device: installedDevice };
+        }
         if (installerTimedOut) {
             publishDriverInstallStatus({ phase: 'close' });
             await electron_1.dialog.showMessageBox(window, {
@@ -962,8 +1023,9 @@ async function integrate(window) {
                 title: 'WinUSB 설치 응답 없음',
                 message: '설치 도우미가 제한 시간 안에 응답하지 않았습니다.',
                 detail: [
-                    '관리자 권한 확인 창이 다른 창 뒤에 있었거나 Windows가 설치를 완료하지 못했을 수 있습니다.',
-                    'USB 케이블을 분리하지 말고 잠시 기다린 뒤 MiniDisc 연결 진단에서 드라이버 상태를 확인하세요.',
+                    '현재 USB 모드의 장치가 WinUSB로 바뀌었는지 다시 확인했지만 설치를 확인하지 못했습니다.',
+                    '관리자 권한 확인 창, 다른 드라이버 설치, SonicStage/OpenMG 등 기기를 사용 중인 프로그램을 확인해 주세요.',
+                    '앱을 종료한 뒤 USB를 다시 연결하거나 Windows를 재시작한 다음 같은 모드에서 다시 설치할 수 있습니다.',
                 ].join('\n'),
                 buttons: ['확인'],
             });

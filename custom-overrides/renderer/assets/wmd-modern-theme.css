@@ -278,6 +278,24 @@ button[data-wmd-mode-card]:focus-visible {
   backdrop-filter: blur(3px);
 }
 
+/*
+ * The upstream MUI palette follows the Windows light/dark preference, while
+ * this custom shell is always dark. On Windows light mode, generated JSS
+ * classes otherwise reapply black text to the disc title and track rows.
+ */
+[data-wmd-shell="main"],
+[data-wmd-shell="main"] .MuiTypography-root,
+[data-wmd-shell="main"] .MuiTableCell-root,
+[data-wmd-shell="main"] .MuiInputBase-root,
+[data-wmd-shell="main"] .MuiInputBase-input {
+  color: var(--wmd-text) !important;
+}
+
+[data-wmd-shell="main"] .MuiTypography-colorTextSecondary,
+[data-wmd-shell="main"] .MuiFormHelperText-root {
+  color: var(--wmd-text-muted) !important;
+}
+
 [data-wmd-shell][data-wmd-loading-state="true"] h1 {
   color: #e8e3e6 !important;
 }
