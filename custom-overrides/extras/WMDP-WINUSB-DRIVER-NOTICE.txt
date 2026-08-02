@@ -1,0 +1,15 @@
+Web MiniDisc Pro universal WinUSB driver package
+
+The INF structure is derived from the WinUSB template in libwdi 1.5.1.
+Copyright (c) 2010-2025 Pete Batard and libwdi contributors.
+libwdi is licensed under GNU LGPL version 3 or later.
+
+This build contains no libwdi installer executable. It includes a reviewed,
+pre-generated INF/CAT/CER package for the physical NetMD and Hi-MD USB IDs
+supported by the bundled netmd-js and himd-js versions. Windows' own certutil
+and pnputil utilities perform certificate registration and driver installation.
+
+The generated INF and its generator are included in SOURCE-MODIFICATIONS.
+
+Upstream project:
+https://github.com/pbatard/libwdi

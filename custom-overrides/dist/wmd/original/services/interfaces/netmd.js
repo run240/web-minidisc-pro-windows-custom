@@ -273,6 +273,24 @@ class NetMDUSBService extends NetMDService {
         if (netmdInterface)
             await netmdInterface.netMd.finalize();
     }
+    async finalizeForDisconnect() {
+        const netmdInterface = this.netmdInterface;
+        this.netmdInterface = undefined;
+        this.dropCachedContentList();
+        if (!netmdInterface)
+            return;
+        const deviceName = netmdInterface.netMd.getDeviceName() ?? '';
+        const isPortableNetMD = /\b(?:MZ-|AM-NX|IM-|SJ-MR)/i.test(deviceName);
+        if (isPortableNetMD) {
+            const ejectRequest = Promise.resolve(netmdInterface.ejectDisc()).then(() => true, () => false);
+            await Promise.race([
+                ejectRequest,
+                (0, utils_1.sleep)(6000).then(() => false),
+            ]);
+            await (0, utils_1.sleep)(1500);
+        }
+        await netmdInterface.netMd.finalize();
+    }
     async rewriteGroups(groups) {
         const disc = await this.listContentUsingCache();
         disc.groups = groups;
@@ -523,10 +541,18 @@ class NetMDUSBService extends NetMDService {
         await this.currentSession.init();
     }
     async finalizeUpload() {
-        await this.currentSession.close();
-        await this.netmdInterface.release();
-        this.currentSession = undefined;
-        this.dropCachedContentList();
+        try {
+            await this.currentSession?.close();
+        }
+        finally {
+            try {
+                await this.netmdInterface?.release();
+            }
+            finally {
+                this.currentSession = undefined;
+                this.dropCachedContentList();
+            }
+        }
     }
     getWorkerForUpload() {
         return [new Worker(), web_encrypt_worker_1.makeGetAsyncPacketIteratorOnWorkerThread];
@@ -552,19 +578,23 @@ class NetMDUSBService extends NetMDService {
             progressCallback({ written, encrypted, total });
         }
         const [w, creator] = this.getWorkerForUpload();
-        const webWorkerAsyncPacketIterator = creator(w, ({ encryptedBytes }) => {
-            encrypted = encryptedBytes;
-            updateProgress();
-        });
-        const halfWidthTitle = sanitizeNetMDHalfWidthTitle(title);
-        fullWidthTitle = sanitizeNetMDFullWidthTitle(fullWidthTitle);
-        const mdTrack = new netmd_js_1.MDTrack(halfWidthTitle, exports.WireformatDict[format], data, 0x400, fullWidthTitle, webWorkerAsyncPacketIterator);
-        await this.currentSession.downloadTrack(mdTrack, ({ writtenBytes }) => {
-            written = writtenBytes;
-            updateProgress();
-        }, _format.codec === 'SPM' ? netmd_js_1.DiscFormat.spMono : undefined);
-        w.terminate();
-        this.dropCachedContentList();
+        try {
+            const webWorkerAsyncPacketIterator = creator(w, ({ encryptedBytes }) => {
+                encrypted = encryptedBytes;
+                updateProgress();
+            });
+            const halfWidthTitle = sanitizeNetMDHalfWidthTitle(title);
+            fullWidthTitle = sanitizeNetMDFullWidthTitle(fullWidthTitle);
+            const mdTrack = new netmd_js_1.MDTrack(halfWidthTitle, exports.WireformatDict[format], data, 0x400, fullWidthTitle, webWorkerAsyncPacketIterator);
+            await this.currentSession.downloadTrack(mdTrack, ({ writtenBytes }) => {
+                written = writtenBytes;
+                updateProgress();
+            }, _format.codec === 'SPM' ? netmd_js_1.DiscFormat.spMono : undefined);
+            this.dropCachedContentList();
+        }
+        finally {
+            await Promise.resolve(w.terminate()).catch(() => { });
+        }
     }
     async download(index, progressCallback) {
         const [format, data] = await (0, netmd_js_1.upload)(this.netmdInterface, index, ({ readBytes, totalBytes }) => {
@@ -630,6 +660,9 @@ __decorate([
 __decorate([
     utils_2.asyncMutex
 ], NetMDUSBService.prototype, "finalize", null);
+__decorate([
+    utils_2.asyncMutex
+], NetMDUSBService.prototype, "finalizeForDisconnect", null);
 __decorate([
     utils_2.asyncMutex
 ], NetMDUSBService.prototype, "rewriteGroups", null);
@@ -824,23 +857,27 @@ class NetMDFactoryUSBService {
             progressCallback({ written, encrypted, total });
         }
         const [w, creator] = this.parent.getWorkerForUpload();
-        const webWorkerAsyncPacketIterator = creator(w, ({ encryptedBytes }) => {
-            encrypted = encryptedBytes;
-            updateProgress();
-        });
-        const halfWidthTitle = sanitizeNetMDHalfWidthTitle(title);
-        fullWidthTitle = sanitizeNetMDFullWidthTitle(fullWidthTitle);
-        let mdTrack = new netmd_js_1.MDTrack(halfWidthTitle, netmd_js_1.Wireformat.l105kbps, data, 0x400, fullWidthTitle, webWorkerAsyncPacketIterator);
         let index = -1;
-        await this.exploitStateManager.envelop(netmd_exploits_1.SPUpload, mono ? 1 : 2, async (spUpload) => {
-            mdTrack = spUpload.prepareTrack(mdTrack);
-            total = mdTrack.data.byteLength;
-            [index] = (await this.parent.currentSession.downloadTrack(mdTrack, ({ writtenBytes }) => {
-                written = writtenBytes;
+        try {
+            const webWorkerAsyncPacketIterator = creator(w, ({ encryptedBytes }) => {
+                encrypted = encryptedBytes;
                 updateProgress();
-            }));
-        });
-        w.terminate();
+            });
+            const halfWidthTitle = sanitizeNetMDHalfWidthTitle(title);
+            fullWidthTitle = sanitizeNetMDFullWidthTitle(fullWidthTitle);
+            let mdTrack = new netmd_js_1.MDTrack(halfWidthTitle, netmd_js_1.Wireformat.l105kbps, data, 0x400, fullWidthTitle, webWorkerAsyncPacketIterator);
+            await this.exploitStateManager.envelop(netmd_exploits_1.SPUpload, mono ? 1 : 2, async (spUpload) => {
+                mdTrack = spUpload.prepareTrack(mdTrack);
+                total = mdTrack.data.byteLength;
+                [index] = (await this.parent.currentSession.downloadTrack(mdTrack, ({ writtenBytes }) => {
+                    written = writtenBytes;
+                    updateProgress();
+                }));
+            });
+        }
+        finally {
+            await Promise.resolve(w.terminate()).catch(() => { });
+        }
         if (this.fasterTransferEnabled) {
             await this.exploitStateManager.require(netmd_exploits_1.PCMFasterUpload);
         }

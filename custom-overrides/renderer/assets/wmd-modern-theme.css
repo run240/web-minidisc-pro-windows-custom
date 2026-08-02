@@ -108,6 +108,20 @@ button[data-wmd-mode-card] {
     box-shadow 160ms ease !important;
 }
 
+/*
+ * MUI builds its Typography colors from the Windows system preference. The
+ * custom shell stays dark even when Windows is in light mode, so make every
+ * card label inherit the card's explicit foreground instead of MUI's black
+ * light-palette value.
+ */
+button[data-wmd-mode-card] .MuiTypography-root {
+  color: inherit !important;
+}
+
+button[data-wmd-mode-card] .MuiTypography-colorTextSecondary {
+  color: var(--wmd-text-muted) !important;
+}
+
 button[data-wmd-mode-card="himd"] {
   background:
     linear-gradient(145deg, rgba(188, 90, 136, 0.09), transparent 48%),
@@ -202,6 +216,26 @@ button[data-wmd-mode-card]:focus-visible {
 [data-wmd-shell] .MuiIconButton-root {
   border-radius: 10px !important;
   text-transform: none !important;
+}
+
+/* Top menu and playback transport controls must not inherit light-mode black. */
+[data-wmd-shell] .MuiIconButton-root,
+[data-wmd-shell] [data-wmd-lucide-top-menu="true"] {
+  color: rgba(244, 241, 243, 0.78) !important;
+}
+
+[data-wmd-shell] .MuiIconButton-root:hover,
+[data-wmd-shell] [data-wmd-lucide-top-menu="true"]:hover {
+  color: var(--wmd-accent-hover) !important;
+}
+
+[data-wmd-shell] .MuiIconButton-root.Mui-disabled {
+  color: rgba(244, 241, 243, 0.34) !important;
+}
+
+[data-wmd-shell] .MuiIconButton-root svg,
+[data-wmd-shell] [data-wmd-lucide-top-menu="true"] svg {
+  color: inherit !important;
 }
 
 [data-wmd-shell] .MuiButton-containedPrimary,
@@ -543,6 +577,34 @@ button[data-wmd-mode-card]:focus-visible {
 .MuiMenu-paper .MuiListItemIcon-root,
 .MuiMenu-paper .MuiListItemText-root {
   color: #df90b5 !important;
+}
+
+/* Portal menus live outside data-wmd-shell and otherwise use Windows' light
+ * palette. Cover both regular MUI menus and the track right-click menu. */
+.MuiMenu-paper .MuiMenuItem-root,
+.MuiMenu-paper .MuiMenuItem-root .MuiTypography-root,
+.MuiMenu-paper .MuiMenuItem-root .MuiListItemIcon-root,
+.MuiMenu-paper .MuiMenuItem-root svg,
+div[class*="-menuContainer"] .MuiButton-root,
+div[class*="-menuContainer"] .MuiButton-root .MuiTypography-root,
+div[class*="-menuContainer"] .MuiButton-root svg {
+  color: #e7e1e5 !important;
+}
+
+.MuiMenu-paper .MuiMenuItem-root:hover,
+.MuiMenu-paper .MuiMenuItem-root:hover .MuiTypography-root,
+.MuiMenu-paper .MuiMenuItem-root:hover .MuiListItemIcon-root,
+.MuiMenu-paper .MuiMenuItem-root:hover svg,
+div[class*="-menuContainer"] .MuiButton-root:hover,
+div[class*="-menuContainer"] .MuiButton-root:hover svg {
+  color: #f5a2c9 !important;
+}
+
+.MuiMenu-paper .MuiMenuItem-root.Mui-disabled,
+.MuiMenu-paper .MuiMenuItem-root.Mui-disabled .MuiTypography-root,
+div[class*="-menuContainer"] .MuiButton-root.Mui-disabled,
+div[class*="-menuContainer"] .MuiButton-root.Mui-disabled svg {
+  color: rgba(244, 241, 243, 0.34) !important;
 }
 
 [data-wmd-upstream-source-link="true"],

@@ -2,6 +2,28 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.CHANGELOG = void 0;
 const electron_1 = require("electron");
+const serializeDiagnosticValue = value => {
+    if (value instanceof Error)
+        return { name: value.name, message: value.message, stack: value.stack };
+    try {
+        return typeof value === 'string' ? value : JSON.parse(JSON.stringify(value));
+    }
+    catch (_) {
+        return String(value);
+    }
+};
+window.addEventListener('error', event => {
+    void electron_1.ipcRenderer.invoke('appendDiagnosticLog', 'window error', {
+        message: event.message,
+        filename: event.filename,
+        lineno: event.lineno,
+        colno: event.colno,
+        error: serializeDiagnosticValue(event.error),
+    });
+}, true);
+window.addEventListener('unhandledrejection', event => {
+    void electron_1.ipcRenderer.invoke('appendDiagnosticLog', 'unhandled rejection', serializeDiagnosticValue(event.reason));
+}, true);
 exports.CHANGELOG = [
     {
         before: 'Version 1.5.0',
@@ -195,7 +217,7 @@ exports.CHANGELOG = [
                         line-height: 1.55; white-space: pre-wrap;
                     }
                     .wmd-warning-footer {
-                        display: flex; justify-content: flex-end;
+                        display: flex; justify-content: flex-end; gap: 10px;
                         padding: 0 22px 20px;
                     }
                     .wmd-warning-close {
@@ -204,7 +226,30 @@ exports.CHANGELOG = [
                         background: #c64f88; border: 0; border-radius: 10px;
                     }
                     .wmd-warning-close:hover { background: #d45e98; }
-                    .wmd-warning-close:focus-visible {
+                    .wmd-warning-format {
+                        padding: 10px 17px; cursor: pointer; font: inherit; font-weight: 700;
+                        color: #fff; background: #a92d3e; border: 1px solid #d85a6b;
+                        border-radius: 10px;
+                    }
+                    .wmd-warning-format:hover { background: #bd3549; }
+                    .wmd-warning-format:disabled { cursor: wait; opacity: .65; }
+                    .wmd-warning-choice {
+                        min-width: 94px; padding: 10px 17px; cursor: pointer;
+                        color: #eee9ed; background: rgba(255, 255, 255, .055);
+                        border: 1px solid rgba(255, 255, 255, .16); border-radius: 10px;
+                        font: inherit; font-weight: 700;
+                    }
+                    .wmd-warning-choice:hover { background: rgba(255, 255, 255, .10); }
+                    .wmd-warning-choice.primary {
+                        color: #fff; background: #a74373; border-color: #c65a8d;
+                    }
+                    .wmd-warning-choice.primary:hover { background: #b94d80; }
+                    .wmd-warning-choice.danger {
+                        color: #ffdce2; background: rgba(169, 45, 62, .72); border-color: #d85a6b;
+                    }
+                    .wmd-warning-choice.danger:hover { background: #a92d3e; }
+                    .wmd-warning-close:focus-visible,
+                    .wmd-warning-choice:focus-visible {
                         outline: 2px solid #f4a3ca; outline-offset: 2px;
                     }
                 `;
@@ -240,35 +285,107 @@ exports.CHANGELOG = [
             closeButton.type = 'button';
             closeButton.className = 'wmd-warning-close';
             closeButton.textContent = '확인';
-            const close = () => {
+            const choices = Array.isArray(warning.choices) ? warning.choices : [];
+            const close = (result = null) => {
                 document.removeEventListener('keydown', onKeyDown, true);
                 overlay.remove();
-                resolve();
+                resolve(result);
             };
             const onKeyDown = (event) => {
-                if (event.key === 'Escape' || event.key === 'Enter') {
+                if (event.key === 'Escape') {
                     event.preventDefault();
-                    close();
+                    close(warning.cancelValue ?? null);
+                }
+                else if (event.key === 'Enter' && choices.length === 0) {
+                    event.preventDefault();
+                    close(null);
                 }
             };
-            closeButton.addEventListener('click', close, { once: true });
+            if (choices.length > 0) {
+                for (const choice of choices) {
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.className = `wmd-warning-choice ${choice.kind || 'secondary'}`;
+                    button.textContent = String(choice.label || choice.value || '선택');
+                    button.addEventListener('click', () => close(choice.value ?? null), { once: true });
+                    footer.append(button);
+                }
+            }
+            else {
+                closeButton.addEventListener('click', () => close(null), { once: true });
+            }
+            if (choices.length === 0 && (warning.formatTarget === 'himd' || warning.formatTarget === 'netmd')) {
+                const formatButton = document.createElement('button');
+                formatButton.type = 'button';
+                formatButton.className = 'wmd-warning-format';
+                formatButton.textContent = warning.formatLabel || (warning.formatTarget === 'himd' ? 'Hi-MD로 포맷' : '일반 MD로 포맷');
+                formatButton.addEventListener('click', async () => {
+                    formatButton.disabled = true;
+                    closeButton.disabled = true;
+                    const originalLabel = formatButton.textContent;
+                    formatButton.textContent = '기기 확인 중…';
+                    try {
+                        const result = await electron_1.ipcRenderer.invoke('formatTimedOutMiniDiscMedia', warning.formatTarget);
+                        if (result?.cancelled) {
+                            formatButton.disabled = false;
+                            closeButton.disabled = false;
+                            formatButton.textContent = originalLabel;
+                            return;
+                        }
+                        const resultMessage = result?.message || (result?.ok ? '포맷 명령을 완료했습니다.' : '포맷에 실패했습니다.');
+                        close();
+                        setTimeout(async () => {
+                            await showMiniDiscWarning({
+                                title: result?.ok ? '포맷 완료' : '포맷 실패',
+                                message: resultMessage,
+                                detail: result?.ok
+                                    ? '기기가 새 USB 모드로 다시 연결될 때까지 잠시 기다려 주세요.'
+                                    : '디스크와 USB 연결 상태를 확인한 뒤 다시 시도해 주세요.',
+                            });
+                            if (result?.ok && result.restartRequired) {
+                                reload().catch(error => {
+                                    void showMiniDiscWarning({
+                                        title: '프로그램 재시작 실패',
+                                        message: '프로그램을 자동으로 다시 시작하지 못했습니다.',
+                                        detail: `직접 종료한 뒤 다시 실행해 주세요.\n\n${error instanceof Error ? error.message : String(error)}`,
+                                    });
+                                });
+                            }
+                        }, 0);
+                        return;
+                    }
+                    catch (error) {
+                        close();
+                        setTimeout(() => {
+                            void showMiniDiscWarning({
+                                title: '포맷 오류',
+                                message: '포맷 중 오류가 발생했습니다.',
+                                detail: error instanceof Error ? error.message : String(error),
+                            });
+                        }, 0);
+                        return;
+                    }
+                });
+                footer.append(formatButton);
+            }
             document.addEventListener('keydown', onKeyDown, true);
             header.append(icon, title);
             body.append(message, detail);
-            footer.append(closeButton);
+            if (choices.length === 0)
+                footer.append(closeButton);
             panel.append(header, body, footer);
             overlay.append(panel);
             document.body.append(overlay);
-            closeButton.focus();
+            (footer.querySelector('button') || closeButton).focus();
         }).finally(() => {
             activeMiniDiscWarning = null;
         });
         return activeMiniDiscWarning;
     }
     electron_1.ipcRenderer.on('showMiniDiscWarning', async (_event, warning) => {
-        await showMiniDiscWarning(warning);
+        const result = await showMiniDiscWarning(warning);
         if (warning?.closeChannel)
-            electron_1.ipcRenderer.send(warning.closeChannel);
+            electron_1.ipcRenderer.send(warning.closeChannel, result);
     });
     let activeMiniDiscConfirmation = null;
     function confirmMiniDiscAction(options = {}) {
@@ -756,8 +873,16 @@ exports.CHANGELOG = [
     function formatStandardMDToHiMD() {
         return electron_1.ipcRenderer.invoke('formatStandardMDToHiMD');
     }
-    function returnToModeSelection() {
-        return electron_1.ipcRenderer.invoke('returnToModeSelection');
+    async function returnToModeSelection() {
+        const result = await electron_1.ipcRenderer.invoke('returnToModeSelection');
+        if (result?.ok) {
+            rh1KoreanTitleExperimentEnabled = false;
+            rh1KoreanTitleUseFilename = true;
+            netmdOriginalTitleModeEnabled = false;
+            notifyRH1KoreanTitleModeChanged();
+            notifyNetMDOriginalTitleModeChanged();
+        }
+        return result;
     }
     function setRH1KoreanTitleExperiment(enabled) {
         return electron_1.ipcRenderer.invoke('setRH1KoreanTitleExperiment', Boolean(enabled));
@@ -1533,21 +1658,10 @@ exports.CHANGELOG = [
             button.dataset.wmdLucideFab = 'true';
             button.setAttribute('aria-label', '트랙 추가');
         }
-        const playbackPatterns = [
-            [/previous|이전/i, 'previous'],
-            [/^play$|재생/i, 'play'],
-            [/pause|일시/i, 'pause'],
-            [/stop|정지/i, 'stop'],
-            [/next|다음/i, 'next'],
-        ];
-        for (const button of document.querySelectorAll('button')) {
-            const label = `${button.getAttribute('aria-label') || ''} ${button.title || ''}`.trim();
-            const match = playbackPatterns.find(([pattern]) => pattern.test(label));
-            if (!match || button.dataset.wmdLucidePlayback === match[1])
-                continue;
-            button.innerHTML = lucideIcon(match[1], 22);
-            button.dataset.wmdLucidePlayback = match[1];
-        }
+        // Playback controls change their React-owned child icon whenever play/pause
+        // state changes. Replacing those children with innerHTML makes React later
+        // remove a node it no longer owns and crashes with removeChild/NotFoundError.
+        // Keep the upstream playback icons intact.
     };
     const installModernAlertDialogs = () => {
         for (const dialog of document.querySelectorAll('[role="dialog"]')) {
@@ -1621,9 +1735,11 @@ exports.CHANGELOG = [
     let rh1KoreanTitleExperimentEnabled = false;
     let rh1KoreanTitleUseFilename = true;
     let rh1HiMDPageWasDetected = false;
+    let netmdOriginalTitleModeEnabled = false;
     if (document.documentElement) {
         document.documentElement.dataset.rh1KoreanTitleExperiment = 'false';
         document.documentElement.dataset.rh1KoreanTitleUseFilename = 'false';
+        document.documentElement.dataset.netmdOriginalTitleMode = 'false';
     }
     const notifyRH1KoreanTitleModeChanged = () => {
         if (document.documentElement) {
@@ -1634,17 +1750,17 @@ exports.CHANGELOG = [
         }
         document.dispatchEvent(new Event('rh1-korean-title-mode-changed'));
     };
+    const notifyNetMDOriginalTitleModeChanged = () => {
+        if (document.documentElement)
+            document.documentElement.dataset.netmdOriginalTitleMode = netmdOriginalTitleModeEnabled ? 'true' : 'false';
+        document.dispatchEvent(new Event('rh1-korean-title-mode-changed'));
+    };
     const installRH1KoreanTitleOption = () => {
         const pageHasRH1HiMD = Array.from(document.querySelectorAll('h1')).some(heading => (heading.textContent || '').replace(/\s+/g, ' ').trim() === 'HiMD (Sony MZ-RH1)');
         if (!pageHasRH1HiMD) {
             document.querySelector('[data-rh1-korean-title-option]')?.remove();
-            if (rh1HiMDPageWasDetected || rh1KoreanTitleExperimentEnabled) {
-                rh1KoreanTitleExperimentEnabled = false;
-                rh1KoreanTitleUseFilename = true;
-                notifyRH1KoreanTitleModeChanged();
-                setRH1KoreanTitleExperiment(false).catch(error => console.warn('RH1 Korean title mode reset failed:', error));
-            }
-            rh1HiMDPageWasDetected = false;
+            // Dialog transitions can briefly remove the page heading. Preserve the
+            // active title policy until the user actually returns to mode selection.
             return;
         }
         rh1HiMDPageWasDetected = true;
@@ -1680,7 +1796,7 @@ exports.CHANGELOG = [
         const experimentInput = document.createElement('input');
         experimentInput.type = 'checkbox';
         experimentInput.checked = rh1KoreanTitleExperimentEnabled;
-        experimentInput.setAttribute('aria-label', 'RH1 + 55ELK 한글 제목 전송 실험');
+        experimentInput.setAttribute('aria-label', '한글 제목 유지');
         Object.assign(experimentInput.style, {
             width: '18px',
             height: '18px',
@@ -1689,7 +1805,7 @@ exports.CHANGELOG = [
             cursor: 'pointer',
         });
         const experimentLabel = document.createElement('span');
-        experimentLabel.textContent = 'RH1 + 55ELK 한글 제목 전송 실험';
+        experimentLabel.textContent = '한글 제목 유지';
         const badge = document.createElement('span');
         badge.textContent = '비공식';
         Object.assign(badge.style, {
@@ -1703,7 +1819,7 @@ exports.CHANGELOG = [
         });
         experimentRow.append(experimentInput, experimentLabel, badge);
         const description = document.createElement('div');
-        description.textContent = 'Sony MZ-RH1 + RM-MC55ELK 조합 전용입니다. 켜면 제목·앨범·아티스트의 한글을 UTF-16로 보존하며, 목록에도 즉시 반영됩니다.';
+        description.textContent = 'Sony MZ-RH1 Hi-MD 전용입니다. 켜면 여러 곡 전송과 전송 후 수정에서 제목·앨범·아티스트의 한글을 그대로 보존합니다.';
         Object.assign(description.style, {
             margin: '7px 0 8px 28px',
             color: 'rgba(255, 255, 255, 0.70)',
@@ -1755,7 +1871,7 @@ exports.CHANGELOG = [
             filenameRow.style.opacity = filenameInput.disabled ? '0.48' : '1';
             filenameRow.style.cursor = filenameInput.disabled ? 'default' : 'pointer';
             status.textContent = rh1KoreanTitleExperimentEnabled
-                ? '한글 보존 사용 중 · 이 상태에서 “녹음 시작”을 누르면 실험 모드로 전송됩니다.'
+                ? '한글 유지 사용 중 · 여러 곡 전체와 전송 후 제목 수정에 같은 설정이 적용됩니다.'
                 : '기본값: 한글 제목을 로마자로 변환합니다.';
         };
         experimentInput.addEventListener('change', async () => {
@@ -1794,6 +1910,156 @@ exports.CHANGELOG = [
             content.appendChild(panel);
         }
         refreshPanelState();
+    };
+    const installNetMDOriginalTitleOption = () => {
+        const isHiMDPage = Array.from(document.querySelectorAll('h1')).some(heading => (heading.textContent || '').trim().startsWith('HiMD ('));
+        const dialog = document.getElementById('convert-dialog-slide-title')?.closest('[role="dialog"]');
+        if (isHiMDPage || !dialog || dialog.querySelector('[data-netmd-original-title-option]'))
+            return;
+        const content = dialog.querySelector('.MuiDialogContent-root');
+        if (!content)
+            return;
+        const panel = document.createElement('section');
+        panel.dataset.netmdOriginalTitleOption = 'true';
+        panel.dataset.noKoreanTranslation = 'true';
+        Object.assign(panel.style, {
+            margin: '14px 0 8px', padding: '12px 14px', border: '1px solid rgba(222,153,87,.42)',
+            borderRadius: '5px', background: 'rgba(222,153,87,.09)', color: 'rgba(255,255,255,.92)',
+        });
+        const row = document.createElement('label');
+        Object.assign(row.style, { display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', fontSize: '15px', fontWeight: '600' });
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.checked = netmdOriginalTitleModeEnabled;
+        input.setAttribute('aria-label', '원본 프로그램 방식으로 제목 보내기');
+        Object.assign(input.style, { width: '18px', height: '18px', margin: '0', accentColor: '#de9957' });
+        const label = document.createElement('span');
+        label.textContent = '원본 프로그램 방식으로 제목 보내기';
+        const badge = document.createElement('span');
+        badge.textContent = '실험';
+        Object.assign(badge.style, { marginLeft: 'auto', padding: '2px 7px', borderRadius: '10px', background: '#a76832', color: '#fff', fontSize: '11px' });
+        row.append(input, label, badge);
+        const description = document.createElement('div');
+        description.textContent = '켜면 우리가 추가한 로마자 변환만 건너뛰고 Web MiniDisc 원본의 제목 처리 함수를 그대로 사용합니다. 기기에서 글자가 깨질 수 있습니다.';
+        Object.assign(description.style, { margin: '7px 0 0 28px', color: 'rgba(255,224,191,.78)', fontSize: '12px', lineHeight: '1.45' });
+        const status = document.createElement('div');
+        Object.assign(status.style, { margin: '7px 0 0 28px', color: '#e7ad78', fontSize: '11px' });
+        const refresh = () => {
+            input.checked = netmdOriginalTitleModeEnabled;
+            status.textContent = netmdOriginalTitleModeEnabled
+                ? '원본 처리 방식 사용 중 · 현재 목록 전체에 적용됩니다.'
+                : '기본값: 한글을 로마자로 변환합니다.';
+        };
+        input.addEventListener('change', () => {
+            netmdOriginalTitleModeEnabled = input.checked;
+            notifyNetMDOriginalTitleModeChanged();
+            refresh();
+        });
+        panel.append(row, description, status);
+        const advanced = Array.from(content.querySelectorAll('.MuiAccordionSummary-root, [role="button"]')).find(element => /^(고급 설정|Advanced Options)$/.test((element.textContent || '').replace(/\s+/g, ' ').trim()))?.closest('.MuiAccordion-root');
+        if (advanced?.parentElement)
+            advanced.parentElement.insertBefore(panel, advanced);
+        else
+            content.appendChild(panel);
+        refresh();
+    };
+    const installRH1KoreanRenameOption = () => {
+        const pageHasRH1HiMD = Array.from(document.querySelectorAll('h1')).some(heading => (heading.textContent || '').replace(/\s+/g, ' ').trim() === 'HiMD (Sony MZ-RH1)');
+        if (!pageHasRH1HiMD)
+            return;
+        const dialogTitle = document.getElementById('rename-dialog-title');
+        const dialog = dialogTitle?.closest('[role="dialog"]');
+        if (!dialog || dialog.querySelector('[data-rh1-korean-rename-option]') || !dialog.querySelector('#himdName'))
+            return;
+        const content = dialog.querySelector('.MuiDialogContent-root');
+        if (!content)
+            return;
+        const row = document.createElement('label');
+        row.dataset.rh1KoreanRenameOption = 'true';
+        row.dataset.noKoreanTranslation = 'true';
+        Object.assign(row.style, {
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: '10px',
+            margin: '10px 0 2px',
+            padding: '12px 14px',
+            border: '1px solid rgba(188, 90, 136, 0.38)',
+            borderRadius: '10px',
+            background: 'rgba(188, 90, 136, 0.09)',
+            color: 'rgba(255, 255, 255, 0.92)',
+            cursor: 'pointer',
+        });
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.checked = rh1KoreanTitleExperimentEnabled;
+        input.setAttribute('aria-label', '수정한 한글 제목 유지');
+        Object.assign(input.style, {
+            width: '18px',
+            height: '18px',
+            margin: '2px 0 0',
+            accentColor: '#bc5a88',
+            cursor: 'pointer',
+        });
+        const copy = document.createElement('span');
+        copy.innerHTML = '<strong style="display:block;margin-bottom:3px">한글 제목 유지</strong><span style="display:block;color:rgba(255,255,255,.66);font-size:12px;line-height:1.45">켜면 제목·앨범·아티스트를 한글 그대로 저장합니다. 끄면 수정한 값 전체를 로마자로 변환합니다.</span>';
+        input.addEventListener('change', async () => {
+            const requestedState = input.checked;
+            input.disabled = true;
+            try {
+                const result = await setRH1KoreanTitleExperiment(requestedState);
+                if (!result?.ok)
+                    throw new Error(result?.message || '한글 제목 유지 설정을 변경하지 못했습니다.');
+                rh1KoreanTitleExperimentEnabled = Boolean(result.enabled);
+                notifyRH1KoreanTitleModeChanged();
+            }
+            catch (error) {
+                window.alert(error instanceof Error ? error.message : String(error));
+            }
+            finally {
+                input.checked = rh1KoreanTitleExperimentEnabled;
+                input.disabled = false;
+            }
+        });
+        row.append(input, copy);
+        content.appendChild(row);
+    };
+    const installNetMDKoreanRenameNotice = () => {
+        const dialogTitle = document.getElementById('rename-dialog-title');
+        const dialog = dialogTitle?.closest('[role="dialog"]');
+        const nameInput = dialog?.querySelector('#name');
+        if (!dialog || !nameInput || dialog.querySelector('#himdName'))
+            return;
+        const content = dialog.querySelector('.MuiDialogContent-root');
+        if (!content)
+            return;
+        let notice = dialog.querySelector('[data-netmd-korean-rename-notice]');
+        if (!notice) {
+            notice = document.createElement('div');
+            notice.dataset.netmdKoreanRenameNotice = 'true';
+            notice.dataset.noKoreanTranslation = 'true';
+            notice.textContent = 'NetMD 제목 영역은 한글을 직접 저장할 수 없어 적용 시 로마자로 변환됩니다. 한글 제목을 그대로 저장하려면 RH1의 Hi-MD 모드를 사용하세요.';
+            Object.assign(notice.style, {
+                display: 'none',
+                margin: '9px 0 2px',
+                padding: '10px 12px',
+                border: '1px solid rgba(222, 153, 87, 0.38)',
+                borderRadius: '9px',
+                background: 'rgba(222, 153, 87, 0.08)',
+                color: 'rgba(255, 224, 191, 0.88)',
+                fontSize: '12px',
+                lineHeight: '1.45',
+            });
+            content.appendChild(notice);
+        }
+        const updateNotice = () => {
+            const values = Array.from(dialog.querySelectorAll('#name, #fullWidthTitle')).map(input => input.value || '');
+            notice.style.display = values.some(value => /[가-힣ㄱ-ㅎㅏ-ㅣ]/.test(value)) ? 'block' : 'none';
+        };
+        if (!dialog.dataset.netmdKoreanRenameNoticeReady) {
+            dialog.dataset.netmdKoreanRenameNoticeReady = 'true';
+            dialog.addEventListener('input', updateNotice);
+        }
+        updateNotice();
     };
     const installNetMDFormatButton = () => {
         for (const dialog of document.querySelectorAll('[role="dialog"]')) {
@@ -1851,18 +2117,34 @@ exports.CHANGELOG = [
                         const closeButton = Array.from(dialog.querySelectorAll('button')).find(candidate => candidate !== button &&
                             /^(닫기|Close)$/i.test((candidate.textContent || '').trim()));
                         closeButton?.click();
-                        window.alert(`${resultMessage}\n\n새 NetMD USB 모드를 다시 검색하기 위해 프로그램을 다시 시작합니다.`);
+                        await showMiniDiscWarning({
+                            title: 'NetMD 포맷 완료',
+                            message: resultMessage,
+                            detail: '새 NetMD USB 모드를 다시 검색하기 위해 프로그램을 다시 시작합니다.',
+                        });
                         reload().catch(restartError => {
-                            window.alert(`포맷은 완료했지만 프로그램을 자동으로 다시 시작하지 못했습니다.\n직접 프로그램을 종료한 뒤 다시 실행해 주세요.\n\n${restartError instanceof Error ? restartError.message : String(restartError)}`);
+                            void showMiniDiscWarning({
+                                title: '프로그램 재시작 실패',
+                                message: '포맷은 완료했지만 프로그램을 자동으로 다시 시작하지 못했습니다.',
+                                detail: `직접 프로그램을 종료한 뒤 다시 실행해 주세요.\n\n${restartError instanceof Error ? restartError.message : String(restartError)}`,
+                            });
                         });
                         return;
                     }
-                    window.alert(resultMessage);
+                    await showMiniDiscWarning({
+                        title: 'NetMD 포맷 실패',
+                        message: resultMessage,
+                        detail: '디스크와 USB 연결 상태를 확인한 뒤 다시 시도해 주세요.',
+                    });
                     button.disabled = false;
                     button.textContent = '전체 삭제 후 NetMD로 초기화';
                 }
                 catch (error) {
-                    window.alert(`NetMD 포맷 중 오류가 발생했습니다: ${error instanceof Error ? error.message : String(error)}`);
+                    await showMiniDiscWarning({
+                        title: 'NetMD 포맷 오류',
+                        message: 'NetMD 포맷 중 오류가 발생했습니다.',
+                        detail: error instanceof Error ? error.message : String(error),
+                    });
                     button.disabled = false;
                     button.textContent = '전체 삭제 후 NetMD로 초기화';
                 }
@@ -1916,7 +2198,13 @@ exports.CHANGELOG = [
                         button.textContent = '일반 MD를 지우고 Hi-MD로 포맷';
                         return;
                     }
-                    window.alert(result?.message || (result?.ok ? 'Hi-MD 포맷 명령을 완료했습니다.' : 'Hi-MD 포맷에 실패했습니다.'));
+                    await showMiniDiscWarning({
+                        title: result?.ok ? 'Hi-MD 포맷 완료' : 'Hi-MD 포맷 실패',
+                        message: result?.message || (result?.ok ? 'Hi-MD 포맷 명령을 완료했습니다.' : 'Hi-MD 포맷에 실패했습니다.'),
+                        detail: result?.ok
+                            ? '새 Hi-MD 파일시스템으로 다시 연결합니다.'
+                            : '디스크와 USB 연결 상태를 확인한 뒤 다시 시도해 주세요.',
+                    });
                     if (result?.ok) {
                         const closeButton = Array.from(dialog.querySelectorAll('button')).find(candidate => candidate !== button &&
                             /^(닫기|Close)$/i.test((candidate.textContent || '').trim()));
@@ -1928,7 +2216,11 @@ exports.CHANGELOG = [
                     }
                 }
                 catch (error) {
-                    window.alert(`Hi-MD 포맷 중 오류가 발생했습니다: ${error instanceof Error ? error.message : String(error)}`);
+                    await showMiniDiscWarning({
+                        title: 'Hi-MD 포맷 오류',
+                        message: 'Hi-MD 포맷 중 오류가 발생했습니다.',
+                        detail: error instanceof Error ? error.message : String(error),
+                    });
                     button.disabled = false;
                     button.textContent = '일반 MD를 지우고 Hi-MD로 포맷';
                 }
@@ -2178,6 +2470,45 @@ exports.CHANGELOG = [
                 text.textContent = '원본 프로젝트 · GitHub';
         }
     };
+    let requestedMiniDiscMode = null;
+    let netMDNoDiscPromptShown = false;
+    let netMDNoDiscPromptTimer = null;
+    const installNetMDNoDiscRecovery = () => {
+        const heading = Array.from(document.querySelectorAll('h1, h2, [role="heading"]'))
+            .find(element => /^불러오는 중(?:…|\.\.\.)?$/.test((element.textContent || '').trim()));
+        const pageText = (document.body?.textContent || '').replace(/\s+/g, ' ');
+        const looksLikeNetMDNoDisc = requestedMiniDiscMode === 'netmd' &&
+            Boolean(heading) &&
+            pageText.includes('디스크가 없습니다') &&
+            pageText.includes('NO DISC');
+        if (!looksLikeNetMDNoDisc) {
+            if (netMDNoDiscPromptTimer !== null) {
+                clearTimeout(netMDNoDiscPromptTimer);
+                netMDNoDiscPromptTimer = null;
+            }
+            netMDNoDiscPromptShown = false;
+            return;
+        }
+        if (netMDNoDiscPromptShown || netMDNoDiscPromptTimer !== null)
+            return;
+        netMDNoDiscPromptTimer = setTimeout(() => {
+            netMDNoDiscPromptTimer = null;
+            const currentText = (document.body?.textContent || '').replace(/\s+/g, ' ');
+            const stillNoDisc = requestedMiniDiscMode === 'netmd' &&
+                currentText.includes('디스크가 없습니다') &&
+                currentText.includes('NO DISC');
+            if (!stillNoDisc || netMDNoDiscPromptShown)
+                return;
+            netMDNoDiscPromptShown = true;
+            void showMiniDiscWarning({
+                title: 'NetMD에서 미디어를 읽을 수 없습니다',
+                message: '디스크가 없거나 Hi-MD 형식의 미디어가 들어 있습니다.',
+                detail: 'Hi-MD 포맷을 유지하려면 뒤로 돌아가 Hi-MD를 선택하세요. 이 디스크를 완전히 지우고 일반 MD 형식으로 바꾸려는 경우에만 “일반 MD로 포맷”을 누르세요. 1GB Hi-MD 전용 미디어는 일반 MD로 변환할 수 없습니다.',
+                formatTarget: 'netmd',
+                formatLabel: '일반 MD로 포맷',
+            });
+        }, 1500);
+    };
     const refreshKoreanUI = () => {
         installModernThemeMarkers();
         installLucideIcons();
@@ -2185,12 +2516,16 @@ exports.CHANGELOG = [
         installHiMDFormatButton();
         installModeHomeButton();
         installRH1KoreanTitleOption();
+        installNetMDOriginalTitleOption();
+        installRH1KoreanRenameOption();
+        installNetMDKoreanRenameNotice();
         installRenameInputFocusRecovery();
         removeObsoleteWelcomeActions();
         translateKoreanUI();
         hideSettingsOverriddenByModernTheme();
         installModernLoadingState();
         cleanUpModernMainMenu();
+        installNetMDNoDiscRecovery();
         installModernAlertDialogs();
         monitorStalledMDTransfer();
     };
@@ -2234,7 +2569,17 @@ exports.CHANGELOG = [
     const MD_TRANSFER_STALL_TIMEOUT_MS = 90000;
     let mdTransferWatchState = null;
     let activeMDTransferStallWarning = null;
+    let rendererReportedTransferActive = false;
+    const reportRendererTransferActive = active => {
+        active = Boolean(active);
+        if (rendererReportedTransferActive === active)
+            return;
+        rendererReportedTransferActive = active;
+        void electron_1.ipcRenderer.invoke('setTransferActive', active).catch(() => { });
+    };
     const findActiveMDTransferDialog = () => Array.from(document.querySelectorAll('[role="dialog"]')).find(dialog => {
+        if (!dialog.isConnected || dialog.hidden || dialog.getAttribute('aria-hidden') === 'true' || dialog.getClientRects().length === 0)
+            return false;
         const text = (dialog.textContent || '').replace(/\s+/g, ' ').trim();
         return /MD에\s*녹음\s*중|MD\s*(?:전송|Transfer)|Recording\s+to\s+MD/i.test(text) &&
             /MD\s*전송|MD\s*(?:Transfer|Upload)/i.test(text);
@@ -2406,6 +2751,8 @@ exports.CHANGELOG = [
     const showMDTransferStallWarning = (snapshot, transferDialog) => {
         if (activeMDTransferStallWarning)
             return;
+        void electron_1.ipcRenderer.invoke('setTransferStalled', true).catch(() => { });
+        void electron_1.ipcRenderer.invoke('appendDiagnosticLog', 'MD transfer stalled', snapshot);
         ensureMDTransferStallStyle();
         const overlay = document.createElement('div');
         overlay.className = 'wmd-transfer-stall-overlay';
@@ -2456,7 +2803,7 @@ exports.CHANGELOG = [
             </div>
             <footer class="wmd-transfer-stall-actions">
                 <button type="button" class="wmd-transfer-stall-button" data-wmd-stall-copy>진단 정보 복사</button>
-                <button type="button" class="wmd-transfer-stall-button wmd-transfer-stall-button-danger" data-wmd-stall-cancel>전송 취소</button>
+                <button type="button" class="wmd-transfer-stall-button wmd-transfer-stall-button-danger" data-wmd-stall-cancel>앱 강제 종료…</button>
                 <button type="button" class="wmd-transfer-stall-button wmd-transfer-stall-button-primary" data-wmd-stall-wait>조금 더 대기</button>
             </footer>
         `;
@@ -2482,7 +2829,7 @@ exports.CHANGELOG = [
             const button = event.currentTarget;
             button.disabled = true;
             try {
-                electron_1.clipboard.writeText(await buildMDTransferDiagnostics(snapshot));
+                await electron_1.ipcRenderer.invoke('writeClipboardText', await buildMDTransferDiagnostics(snapshot));
                 button.textContent = '복사 완료';
             }
             catch (_) {
@@ -2495,15 +2842,8 @@ exports.CHANGELOG = [
                 }
             }, 1600);
         });
-        panel.querySelector('[data-wmd-stall-cancel]').addEventListener('click', () => {
-            const cancelButton = Array.from(transferDialog.querySelectorAll('button')).find(button => /녹음\s*취소|전송\s*취소|Cancel\s*(?:recording|upload|transfer)/i.test((button.textContent || '').trim()));
-            dismiss('cancel');
-            if (cancelButton) {
-                cancelButton.click();
-            }
-            else {
-                showOperationToast('원래 전송 창에서 녹음 취소를 눌러주세요');
-            }
+        panel.querySelector('[data-wmd-stall-cancel]').addEventListener('click', async () => {
+            await electron_1.ipcRenderer.invoke('forceQuitStalledTransfer');
         });
         activeMDTransferStallWarning = { dismiss, percent: snapshot.percent };
         document.body.appendChild(overlay);
@@ -2511,9 +2851,11 @@ exports.CHANGELOG = [
     };
     const monitorStalledMDTransfer = () => {
         const transferDialog = findActiveMDTransferDialog();
+        reportRendererTransferActive(Boolean(transferDialog));
         const progress = readMDTransferProgress(transferDialog);
         if (!transferDialog || !progress) {
             mdTransferWatchState = null;
+            void electron_1.ipcRenderer.invoke('setTransferStalled', false).catch(() => { });
             activeMDTransferStallWarning?.dismiss('complete');
             return;
         }
@@ -2531,6 +2873,7 @@ exports.CHANGELOG = [
         }
         if (mdTransferWatchState.percent !== progress.percent ||
             mdTransferWatchState.track !== progress.track) {
+            void electron_1.ipcRenderer.invoke('setTransferStalled', false).catch(() => { });
             mdTransferWatchState.percent = progress.percent;
             mdTransferWatchState.track = progress.track;
             mdTransferWatchState.text = progress.text;
@@ -2551,7 +2894,7 @@ exports.CHANGELOG = [
             conversionComplete: /파일\s*변환\s*완료|conversion\s*(?:complete|finished)/i.test(progress.text),
         }, transferDialog);
     };
-    setInterval(monitorStalledMDTransfer, 2000);
+    setInterval(monitorStalledMDTransfer, 250);
     const installRenameInputFocusRecovery = () => {
         const title = document.getElementById('rename-dialog-title');
         const dialog = title?.closest('[role="dialog"]');
@@ -2712,6 +3055,7 @@ exports.CHANGELOG = [
                 return;
             }
             if (result?.proceed) {
+                requestedMiniDiscMode = mode;
                 connectionClickBypass.add(target);
                 target.style.pointerEvents = previousPointerEvents;
                 target.click();
@@ -2792,6 +3136,7 @@ exports.CHANGELOG = [
                                 ? hiMDTarget
                                 : null;
                         if (target) {
+                            requestedMiniDiscMode = pendingMode;
                             const message = autoConnectOverlay?.firstElementChild;
                             if (message) {
                                 const modeName = pendingMode === 'himd' ? 'Hi-MD' : 'NetMD';

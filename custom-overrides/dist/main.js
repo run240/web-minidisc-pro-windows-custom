@@ -20,6 +20,20 @@ const encryption_1 = require("networkwm-js/dist/encryption");
 const async_mutex_1 = require("async-mutex");
 const wusb_interop_1 = require("./wusb-interop");
 const device_diagnostics_1 = require("./device-diagnostics");
+function appendDiagnosticLog(category, value) {
+    try {
+        const logPath = path_1.default.join(electron_1.app.getPath('userData'), 'wmd-diagnostic.log');
+        const detail = value instanceof Error
+            ? `${value.name}: ${value.message}\n${value.stack ?? ''}`
+            : typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+        fs_1.default.appendFileSync(logPath, `[${new Date().toISOString()}] ${category}\n${detail}\n\n`, 'utf8');
+    }
+    catch (error) {
+        console.error('Could not write diagnostic log:', error);
+    }
+}
+process.on('uncaughtExceptionMonitor', error => appendDiagnosticLog('MAIN uncaughtException', error));
+process.on('unhandledRejection', reason => appendDiagnosticLog('MAIN unhandledRejection', reason));
 const getOfRenderer = (...p) => path_1.default.join(__dirname, '..', 'renderer', ...p);
 async function ewmdOpenDialog(window, filters, directory) {
     const res = await electron_1.dialog.showOpenDialog(window, { filters, properties: [directory ? 'openDirectory' : 'openFile'] });
@@ -29,9 +43,11 @@ async function ewmdOpenDialog(window, filters, directory) {
         return res.filePaths[0];
 }
 let relaunching = false;
+let recentUsbTransferFailure = null;
 function reload(window) {
     if (relaunching)
         return;
+    appendDiagnosticLog('APP relaunch requested', new Error('Relaunch call stack'));
     relaunching = true;
     // AppImages do not restart correctly
     if (electron_1.app.isPackaged && process.env.APPIMAGE) {
@@ -60,17 +76,17 @@ function wait(milliseconds) {
 let rendererWarningSequence = 0;
 function showRendererWarning(window, warning) {
     if (window.isDestroyed())
-        return Promise.resolve();
+        return Promise.resolve(null);
     const closeChannel = `miniDiscWarningClosed:${process.pid}:${Date.now()}:${rendererWarningSequence++}`;
     return new Promise((resolve) => {
         let settled = false;
-        const finish = () => {
+        const finish = (_event, result = null) => {
             if (settled)
                 return;
             settled = true;
             clearTimeout(timeout);
             electron_1.ipcMain.removeAllListeners(closeChannel);
-            resolve();
+            resolve(result);
         };
         const timeout = setTimeout(finish, 120000);
         electron_1.ipcMain.once(closeChannel, finish);
@@ -293,7 +309,7 @@ function getDefinedFunctions(currentObj) {
     } while ((currentObj = Object.getPrototypeOf(currentObj)));
     return defined;
 }
-function traverseObject(window, objectFactory, namespace) {
+function traverseObject(window, objectFactory, namespace, recovery = {}) {
     let currentObj = objectFactory();
     const defined = getDefinedFunctions(currentObj);
     let hiMDRecoveryPending = false;
@@ -306,6 +322,8 @@ function traverseObject(window, objectFactory, namespace) {
             for (let i = 0; i < allArgs.length; i++) {
                 if (((_a = allArgs[i]) === null || _a === void 0 ? void 0 : _a.interprocessType) === 'function') {
                     allArgs[i] = async (...args) => {
+                        if (window.isDestroyed() || window.webContents.isDestroyed())
+                            return;
                         window.webContents.send('_callback', `${translatedName}_callback${i}`, ...args);
                     };
                 }
@@ -318,6 +336,12 @@ function traverseObject(window, objectFactory, namespace) {
                 });
             }
             targetObject.__activeIpcMethods.add(n);
+            if (n === 'finalizeUpload') {
+                appendDiagnosticLog(`IPC ${namespace}${n} started`, {
+                    deviceName: targetObject.netmdInterface?.netMd?.getDeviceName?.(),
+                    at: Date.now(),
+                });
+            }
             try {
                 const isForcedTOCReload = n === 'listContent' && allArgs[0] === true;
                 if (isForcedTOCReload &&
@@ -335,7 +359,8 @@ function traverseObject(window, objectFactory, namespace) {
                     (['pair', 'connect'].includes(n) || isForcedTOCReload);
                 let result;
                 if (shouldTimeOutHiMD) {
-                    result = await withTimeout(operation, n === 'applyEditBatch' ? 60000 : 30000, n === 'applyEditBatch'
+                    const hiMDTimeout = n === 'applyEditBatch' ? 60000 : n === 'listContent' ? 15000 : 12000;
+                    result = await withTimeout(operation, hiMDTimeout, n === 'applyEditBatch'
                         ? 'Hi-MD 편집 적용과 검증 시간이 초과되었습니다. 장치를 분리하지 말고 잠시 기다린 뒤, 앱이 복구되지 않으면 USB를 다시 연결해 주세요.'
                         : 'Hi-MD 파일시스템을 찾지 못했습니다. 일반 NetMD 포맷 미디어라면 USB 인터페이스가 Hi-MD 모드에 남아 있는 상태일 수 있습니다.', 'HIMD_TIMEOUT');
                 }
@@ -347,11 +372,43 @@ function traverseObject(window, objectFactory, namespace) {
                 else {
                     result = await operation;
                 }
+                if (n === 'finalizeUpload') {
+                    appendDiagnosticLog(`IPC ${namespace}${n} completed`, { at: Date.now() });
+                }
                 return [result, null];
             }
             catch (err) {
                 console.log("Node Error: ");
                 console.log(err);
+                appendDiagnosticLog(`IPC failure ${namespace}${n}`, err);
+                const errorMessage = err instanceof Error ? err.message : String(err);
+                const isUsbDeviceLostDuringTransfer = namespace === '_netmd_' &&
+                    ['prepareUpload', 'upload', 'finalizeUpload'].includes(n) &&
+                    /LIBUSB_TRANSFER_NO_DEVICE|TRANSFER_NO_DEVICE|NO_DEVICE/i.test(errorMessage);
+                if (isUsbDeviceLostDuringTransfer) {
+                    recentUsbTransferFailure = {
+                        at: Date.now(),
+                        namespace,
+                        method: n,
+                        message: errorMessage,
+                    };
+                    appendDiagnosticLog('NetMD transfer device loss remembered', recentUsbTransferFailure);
+                }
+                const isHiMDMassStorageDesync = namespace === '_himd_' &&
+                    /Mass Storage Driver Error|Got a different tag/i.test(errorMessage);
+                if (isHiMDMassStorageDesync && !hiMDRecoveryPending) {
+                    hiMDRecoveryPending = true;
+                    try {
+                        await withTimeout(targetObject.finalize(), 4000, 'Hi-MD 연결 정리 시간 초과');
+                    }
+                    catch (cleanupError) {
+                        console.log('Hi-MD mass-storage resync cleanup failed:', cleanupError);
+                    }
+                    recovery.rememberMode?.('himd');
+                    await wait(250);
+                    reload(window);
+                    return [null, null];
+                }
                 if (err?.code === 'HIMD_TIMEOUT' && !hiMDRecoveryPending) {
                     hiMDRecoveryPending = true;
                     try {
@@ -362,8 +419,10 @@ function traverseObject(window, objectFactory, namespace) {
                     }
                     await showRendererWarning(window, {
                         title: 'Hi-MD 연결 시간이 초과되었습니다',
-                        message: '현재 미디어에서 Hi-MD 파일시스템을 찾지 못해 모드 선택 화면으로 돌아갑니다.',
-                        detail: '일반 NetMD 포맷 미디어가 들어 있다면 RH1의 USB 인터페이스만 Hi-MD 모드에 남아 있는 상태입니다. 일반 미디어라면 NetMD를 선택하고, Hi-MD 포맷이 확실하다면 미디어 장착을 확인한 뒤 다시 시도하세요.',
+                        message: '현재 미디어에서 Hi-MD 파일시스템을 찾지 못했습니다.',
+                        detail: '일반 MD가 들어 있다면 NetMD를 선택하세요. 이 디스크를 완전히 지우고 Hi-MD 형식으로 바꾸려는 경우에만 “Hi-MD로 포맷”을 누르세요.',
+                        formatTarget: 'himd',
+                        formatLabel: 'Hi-MD로 포맷',
                     });
                     if (!window.isDestroyed())
                         window.webContents.reload();
@@ -383,8 +442,10 @@ function traverseObject(window, objectFactory, namespace) {
                     }
                     await showRendererWarning(window, {
                         title: 'NetMD 연결 시간이 초과되었습니다',
-                        message: '기기가 연결 요청에 응답하지 않아 모드 선택 화면으로 돌아갑니다.',
-                        detail: '장치를 잠시 기다린 뒤 NetMD 연결을 다시 시도해 주세요.',
+                        message: '현재 미디어를 일반 MD(NetMD) 형식으로 읽지 못했습니다.',
+                        detail: 'Hi-MD 포맷 디스크라면 Hi-MD를 선택하세요. 이 디스크를 완전히 지우고 일반 MD 형식으로 바꾸려는 경우에만 “일반 MD로 포맷”을 누르세요. 1GB Hi-MD 전용 미디어는 일반 MD로 변환할 수 없습니다.',
+                        formatTarget: 'netmd',
+                        formatLabel: '일반 MD로 포맷',
                     });
                     if (!window.isDestroyed())
                         window.webContents.reload();
@@ -434,7 +495,7 @@ async function integrate(window) {
             '3. WinUSB가 없으면 표시되는 안내에서 “WinUSB 설치”를 누릅니다.',
             '4. Windows 관리자 권한 확인 창을 허용합니다.',
             '',
-            'NetMD와 Hi-MD의 USB ID가 다른 기기는 각 모드에서 처음 한 번씩 설치해야 합니다.',
+            '범용 드라이버를 한 번 설치하면 지원되는 NetMD와 Hi-MD USB ID 모두에 적용됩니다.',
         ].join('\n'),
         buttons: ['확인'],
     }));
@@ -755,6 +816,106 @@ async function integrate(window) {
                     device.mode === 'netmd' &&
                     hiMDProductsByNetMDProduct.has(device.productId))
                 : undefined;
+            if (netMDDevice && netMDDevice.driverStatus !== 'winusb') {
+                return {
+                    proceed: false,
+                    modeSwitchFailed: true,
+                    warning: {
+                        title: '먼저 NetMD 드라이버를 설치해 주세요',
+                        message: `${netMDDevice.modelHint}이(가) 현재 NetMD 모드이지만 WinUSB 드라이버가 설치되지 않았습니다.`,
+                        detail: [
+                            '처음 연결할 때는 모드 선택 화면에서 NetMD를 먼저 눌러 WinUSB 드라이버를 설치하세요.',
+                            '설치가 완료되면 다시 Hi-MD를 선택하면 USB 모드를 자동으로 전환할 수 있습니다.',
+                            '',
+                            '디스크 데이터는 변경되지 않습니다.',
+                        ].join('\n'),
+                    },
+                };
+            }
+            if (hiMDDevice) {
+                const choice = await showRendererWarning(window, {
+                    title: 'Hi-MD에서 NetMD로 전환',
+                    message: '현재 기기는 Hi-MD USB 모드입니다. 어떻게 진행할까요?',
+                    detail: [
+                        'Hi-MD 포맷 미디어를 NetMD로 열면 빈 디스크처럼 보일 수 있습니다.',
+                        '이 상태에서 녹음을 시작하면 기기가 미디어를 일반 MD 형식으로 다시 기록하여 기존 Hi-MD 데이터가 사라질 수 있습니다.',
+                        '',
+                        '“NetMD로 전환만”은 디스크를 즉시 지우지는 않지만, 이후 녹음은 형식을 변경할 수 있습니다.',
+                        '“일반 MD로 포맷”은 확인 절차를 한 번 더 거친 뒤 모든 데이터를 삭제합니다.',
+                        '1GB Hi-MD 전용 미디어는 일반 MD로 포맷할 수 없습니다.',
+                    ].join('\n'),
+                    choices: [
+                        { value: 'cancel', label: '취소', kind: 'secondary' },
+                        { value: 'switch', label: 'NetMD로 전환만', kind: 'primary' },
+                        { value: 'format', label: '일반 MD로 포맷', kind: 'danger' },
+                    ],
+                    cancelValue: 'cancel',
+                });
+                if (choice === null || choice === 'cancel') {
+                    return { proceed: false, cancelled: true };
+                }
+                if (choice === 'format') {
+                    const formatResult = await formatStandardMDToNetMD();
+                    if (formatResult?.cancelled) {
+                        return { proceed: false, cancelled: true };
+                    }
+                    if (formatResult?.ok && formatResult.switchRequested) {
+                        rememberPendingMiniDiscMode('netmd');
+                        reload(window);
+                        return { proceed: false, formatting: true };
+                    }
+                    return {
+                        proceed: false,
+                        modeSwitchFailed: true,
+                        warning: {
+                            title: formatResult?.cancelled ? '포맷을 취소했습니다' : '일반 MD 포맷 실패',
+                            message: formatResult?.message || '미디어를 일반 MD로 포맷하지 못했습니다.',
+                            detail: '디스크 상태는 자동으로 변경하지 않았습니다.',
+                        },
+                    };
+                }
+            }
+            if (netMDDevice) {
+                const choice = await showRendererWarning(window, {
+                    title: 'NetMD에서 Hi-MD로 전환',
+                    message: '현재 기기는 NetMD USB 모드입니다. 어떻게 진행할까요?',
+                    detail: [
+                        '일반 MD 미디어를 Hi-MD로 열면 파일시스템을 찾지 못할 수 있습니다.',
+                        '',
+                        '“Hi-MD로 전환만”은 디스크 데이터를 변경하지 않습니다.',
+                        '“Hi-MD로 포맷”은 확인 절차를 한 번 더 거친 뒤 모든 트랙과 제목을 삭제합니다.',
+                    ].join('\n'),
+                    choices: [
+                        { value: 'cancel', label: '취소', kind: 'secondary' },
+                        { value: 'switch', label: 'Hi-MD로 전환만', kind: 'primary' },
+                        { value: 'format', label: 'Hi-MD로 포맷', kind: 'danger' },
+                    ],
+                    cancelValue: 'cancel',
+                });
+                if (choice === null || choice === 'cancel') {
+                    return { proceed: false, cancelled: true };
+                }
+                if (choice === 'format') {
+                    const formatResult = await formatStandardMDToHiMD();
+                    if (formatResult?.cancelled) {
+                        return { proceed: false, cancelled: true };
+                    }
+                    if (formatResult?.ok && formatResult.switchRequested) {
+                        rememberPendingMiniDiscMode('himd');
+                        reload(window);
+                        return { proceed: false, formatting: true };
+                    }
+                    return {
+                        proceed: false,
+                        modeSwitchFailed: true,
+                        warning: {
+                            title: formatResult?.cancelled ? '포맷을 취소했습니다' : 'Hi-MD 포맷 실패',
+                            message: formatResult?.message || '미디어를 Hi-MD로 포맷하지 못했습니다.',
+                            detail: '포맷이 완료됐다는 안내가 없었다면 디스크를 분리하지 말고 현재 상태를 다시 확인하세요.',
+                        },
+                    };
+                }
+            }
             const restartResult = hiMDDevice
                 ? await switchHiMDInterfaceToNetMD(hiMDDevice)
                 : netMDDevice
@@ -829,7 +990,8 @@ async function integrate(window) {
                 `USB ID: ${device.vendorIdHex}:${device.productIdHex}`,
                 `현재 드라이버: ${currentDriver}`,
                 '',
-                '확인을 누르면 이 기기만 대상으로 WinUSB 드라이버를 자동 설치합니다.',
+                '확인을 누르면 지원되는 MiniDisc 기기용 범용 WinUSB 드라이버를 설치합니다.',
+                '현재 연결된 기기에 즉시 적용되고 다른 지원 USB ID에도 자동으로 사용할 수 있습니다.',
                 '관리자 권한 확인 창(UAC)이 나타나면 허용해 주세요.',
                 '',
                 '설치 중에는 USB 케이블을 분리하지 마세요.',
@@ -843,13 +1005,17 @@ async function integrate(window) {
             return { proceed: false, cancelled: true };
         }
         const extrasDirectory = path_1.default.join(electron_1.app.getAppPath(), 'extras');
-        const installerPath = path_1.default.join(extrasDirectory, 'wmdp-driver-helper.exe');
-        if (!fs_1.default.existsSync(installerPath)) {
+        const bundledDriverDirectory = path_1.default.join(extrasDirectory, 'drivers', 'winusb');
+        const bundledDriverInfPath = path_1.default.join(bundledDriverDirectory, 'web_minidisc_winusb.inf');
+        const bundledDriverCatalogPath = path_1.default.join(bundledDriverDirectory, 'web_minidisc_winusb.cat');
+        const bundledDriverCertificatePath = path_1.default.join(bundledDriverDirectory, 'web_minidisc_winusb.cer');
+        if (![bundledDriverInfPath, bundledDriverCatalogPath, bundledDriverCertificatePath]
+            .every(filePath => fs_1.default.existsSync(filePath))) {
             await electron_1.dialog.showMessageBox(window, {
                 type: 'error',
-                title: '설치 도우미를 찾을 수 없습니다',
-                message: '내장 WinUSB 설치 엔진을 찾지 못했습니다.',
-                detail: installerPath,
+                title: 'WinUSB 드라이버 패키지를 찾을 수 없습니다',
+                message: '내장된 범용 MiniDisc WinUSB 드라이버가 누락되었습니다.',
+                detail: bundledDriverDirectory,
                 buttons: ['확인'],
             });
             return { proceed: false, installerMissing: true };
@@ -864,31 +1030,31 @@ async function integrate(window) {
             }
         };
         const driverWorkDirectory = path_1.default.join(electron_1.app.getPath('temp'), 'WebMiniDisc-Pro-Driver', `${device.vendorIdHex}_${device.productIdHex}`);
-        const driverOutputDirectory = path_1.default.join(driverWorkDirectory, 'driver');
         const installerResultPath = path_1.default.join(driverWorkDirectory, 'installer-result.txt');
         fs_1.default.mkdirSync(driverWorkDirectory, { recursive: true });
-        fs_1.default.mkdirSync(driverOutputDirectory, { recursive: true });
-        fs_1.default.writeFileSync(installerResultPath, 'pending', 'utf8');
-        const helperArguments = [
-            '--name', String(device.modelHint || 'MiniDisc_Device').replace(/[^A-Za-z0-9_.-]/g, '_'),
-            '--manufacturer', 'WebMiniDisc',
-            '--vid', `0x${device.vendorId.toString(16).padStart(4, '0')}`,
-            '--pid', `0x${device.productId.toString(16).padStart(4, '0')}`,
-            '--type', '0',
-            '--dest', 'driver',
-            '--silent',
-            '--timeout', '120000',
-        ];
+        fs_1.default.writeFileSync(installerResultPath, 'awaiting-elevation', 'utf8');
         const quotePowerShell = (value) => `'${String(value).replace(/'/g, "''")}'`;
+        const bundledDriverInstallScript = [
+            `& certutil.exe -addstore -f Root ${quotePowerShell(bundledDriverCertificatePath)}`,
+            'if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }',
+            `& certutil.exe -addstore -f TrustedPublisher ${quotePowerShell(bundledDriverCertificatePath)}`,
+            'if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }',
+            `& pnputil.exe /add-driver ${quotePowerShell(bundledDriverInfPath)} /install`,
+            'exit $LASTEXITCODE',
+        ].join('\r\n');
+        const encodedBundledDriverInstallScript = Buffer.from(bundledDriverInstallScript, 'utf16le').toString('base64');
         const startInstallerCommand = [
-            `$process = Start-Process -FilePath ${quotePowerShell(installerPath)}`,
-            `-ArgumentList @(${helperArguments.map(quotePowerShell).join(',')})`,
-            `-WorkingDirectory ${quotePowerShell(driverWorkDirectory)}`,
-            '-Verb RunAs -WindowStyle Hidden -Wait -PassThru',
+            `$process = Start-Process -FilePath 'powershell.exe'`,
+            `-ArgumentList @('-NoProfile','-NonInteractive','-WindowStyle','Hidden','-EncodedCommand',${quotePowerShell(encodedBundledDriverInstallScript)})`,
+            // Let Windows show UAC normally. The elevated PowerShell hides its own
+            // console only after consent has been accepted.
+            '-Verb RunAs -PassThru',
         ].join(' ');
         const powerShellScript = [
             'try {',
             `  ${startInstallerCommand}`,
+            `  [System.IO.File]::WriteAllText(${quotePowerShell(installerResultPath)}, ('running:' + [string]$process.Id))`,
+            '  $process.WaitForExit()',
             `  [System.IO.File]::WriteAllText(${quotePowerShell(installerResultPath)}, [string]$process.ExitCode)`,
             '  exit 0',
             '} catch {',
@@ -897,36 +1063,15 @@ async function integrate(window) {
             '}',
         ].join('\r\n');
         const encodedPowerShellScript = Buffer.from(powerShellScript, 'utf16le').toString('base64');
-        const targetVid = device.vendorId.toString(16).padStart(4, '0').toUpperCase();
-        const targetPid = device.productId.toString(16).padStart(4, '0').toUpperCase();
-        const targetPnpPattern = `USB\\VID_${targetVid}&PID_${targetPid}*`;
-        const probeDriverScript = [
-            "$ErrorActionPreference = 'SilentlyContinue'",
-            `$device = Get-CimInstance Win32_PnPEntity | Where-Object { $_.PNPDeviceID -like ${quotePowerShell(targetPnpPattern)} } | Select-Object -First 1`,
-            "if ($null -ne $device) { [Console]::Out.Write([string]$device.Service) }",
-        ].join('; ');
-        const probeTargetWinUsb = () => new Promise(resolve => {
-            (0, child_process_1.execFile)('powershell.exe', [
-                '-NoProfile',
-                '-NonInteractive',
-                '-ExecutionPolicy', 'Bypass',
-                '-Command', probeDriverScript,
-            ], {
-                encoding: 'utf8',
-                timeout: 7000,
-                windowsHide: true,
-            }, (error, stdout) => {
-                resolve(!error && String(stdout || '').trim().toLowerCase() === 'winusb');
-            });
-        });
         let powerShellExitCode = -1;
         let installerTimedOut = false;
-        let driverDetectedWhileInstalling = false;
         publishDriverInstallStatus({
             phase: 'installing',
             startedAt: Date.now(),
-            timeoutMs: 135000,
+            timeoutMs: 180000,
         });
+        // Do not enumerate PnP devices while Windows is updating the driver store.
+        // Verify once after the elevated pnputil process exits.
         try {
             const installerProcessResult = await new Promise((resolve, reject) => {
                 const child = (0, child_process_1.spawn)('powershell.exe', [
@@ -935,33 +1080,19 @@ async function integrate(window) {
                     '-EncodedCommand',
                     encodedPowerShellScript,
                 ], {
+                    // The non-elevated watcher has no UI. Windows still displays
+                    // the secure-desktop UAC prompt for the elevated child.
                     windowsHide: true,
                     stdio: 'ignore',
                 });
                 let settled = false;
-                let probeTimer;
                 const finish = (result) => {
                     if (settled)
                         return;
                     settled = true;
                     clearTimeout(timeout);
-                    if (probeTimer)
-                        clearTimeout(probeTimer);
                     resolve(result);
                 };
-                const pollDriver = async () => {
-                    if (settled)
-                        return;
-                    const detected = await probeTargetWinUsb();
-                    if (settled)
-                        return;
-                    if (detected) {
-                        finish({ code: 0, timedOut: false, driverDetected: true });
-                        return;
-                    }
-                    probeTimer = setTimeout(pollDriver, 2500);
-                };
-                probeTimer = setTimeout(pollDriver, 1500);
                 const timeout = setTimeout(() => {
                     try {
                         child.kill();
@@ -969,22 +1100,19 @@ async function integrate(window) {
                     catch (_) {
                         // The elevated helper has its own timeout and may already be exiting.
                     }
-                    finish({ code: -1, timedOut: true, driverDetected: false });
-                }, 135000);
+                    finish({ code: -1, timedOut: true });
+                }, 180000);
                 child.once('error', (error) => {
                     if (settled)
                         return;
                     settled = true;
                     clearTimeout(timeout);
-                    if (probeTimer)
-                        clearTimeout(probeTimer);
                     reject(error);
                 });
-                child.once('exit', (code) => finish({ code: code ?? -1, timedOut: false, driverDetected: false }));
+                child.once('exit', (code) => finish({ code: code ?? -1, timedOut: false }));
             });
             powerShellExitCode = installerProcessResult.code;
             installerTimedOut = installerProcessResult.timedOut;
-            driverDetectedWhileInstalling = installerProcessResult.driverDetected;
         }
         catch (error) {
             publishDriverInstallStatus({ phase: 'close' });
@@ -997,33 +1125,27 @@ async function integrate(window) {
             });
             return { proceed: false, installerFailed: true };
         }
-        if (driverDetectedWhileInstalling) {
-            publishDriverInstallStatus({ phase: 'verifying' });
-            const refreshedDiagnostics = (0, device_diagnostics_1.getMiniDiscDiagnostics)();
-            const refreshedDevice = refreshedDiagnostics.devices.find((candidate) => candidate.vendorId === device.vendorId &&
-                candidate.productId === device.productId);
-            const installedDevice = refreshedDevice?.driverStatus === 'winusb'
-                ? refreshedDevice
-                : { ...device, driverStatus: 'winusb', driverName: 'WinUSB' };
-            webusb.setPreferredDevice(installedDevice);
-            publishDriverInstallStatus({ phase: 'close' });
-            await electron_1.dialog.showMessageBox(window, {
-                type: 'info',
-                title: 'WinUSB 설치 완료',
-                message: `${device.modelHint}의 WinUSB 드라이버를 확인했습니다.`,
-                detail: '설치 도우미가 닫히기를 기다리지 않고 연결을 계속합니다.',
-                buttons: ['확인'],
-            });
-            return { proceed: true, installed: true, device: installedDevice };
-        }
         if (installerTimedOut) {
             publishDriverInstallStatus({ phase: 'close' });
+            let timedOutStage = '설치 도우미의 상태를 확인하지 못했습니다.';
+            try {
+                const installerState = fs_1.default.readFileSync(installerResultPath, 'utf8').trim();
+                if (installerState === 'awaiting-elevation') {
+                    timedOutStage = '관리자 권한 확인(UAC)이 완료되지 않았거나 설치 도우미가 시작되지 않았습니다.';
+                }
+                else if (installerState.startsWith('running:')) {
+                    timedOutStage = `설치 도우미가 실행 중 응답하지 않았습니다. 프로세스 ID: ${installerState.slice('running:'.length) || '확인 불가'}`;
+                }
+            }
+            catch (_) {
+                // Keep the generic stage message when the state file cannot be read.
+            }
             await electron_1.dialog.showMessageBox(window, {
                 type: 'error',
                 title: 'WinUSB 설치 응답 없음',
                 message: '설치 도우미가 제한 시간 안에 응답하지 않았습니다.',
                 detail: [
-                    '현재 USB 모드의 장치가 WinUSB로 바뀌었는지 다시 확인했지만 설치를 확인하지 못했습니다.',
+                    timedOutStage,
                     '관리자 권한 확인 창, 다른 드라이버 설치, SonicStage/OpenMG 등 기기를 사용 중인 프로그램을 확인해 주세요.',
                     '앱을 종료한 뒤 USB를 다시 연결하거나 Windows를 재시작한 다음 같은 모드에서 다시 설치할 수 있습니다.',
                 ].join('\n'),
@@ -1115,7 +1237,7 @@ async function integrate(window) {
             device,
         };
     });
-    electron_1.ipcMain.handle('formatStandardMDToNetMD', async () => {
+    const formatStandardMDToNetMD = async () => {
         if (process.platform !== 'win32') {
             return { ok: false, message: '이 기능은 Windows 전용입니다.' };
         }
@@ -1134,8 +1256,7 @@ async function integrate(window) {
                 message: `${hiMDDevice.modelHint}의 현재 Hi-MD 인터페이스에 WinUSB를 먼저 설치해 주세요.`,
             };
         }
-        const confirmation = await electron_1.dialog.showMessageBox(window, {
-            type: 'warning',
+        const confirmation = await showRendererWarning(window, {
             title: 'NetMD로 포맷',
             message: '현재 디스크를 일반 MD(NetMD)용으로 초기화하시겠습니까?',
             detail: [
@@ -1146,12 +1267,13 @@ async function integrate(window) {
                 `대상 기기: ${hiMDDevice.modelHint} (${hiMDDevice.vendorIdHex}:${hiMDDevice.productIdHex})`,
                 '포맷 후 기기의 USB 인터페이스를 NetMD로 전환합니다.',
             ].join('\n'),
-            buttons: ['취소', '모든 데이터를 지우고 NetMD로 포맷'],
-            defaultId: 0,
-            cancelId: 0,
-            noLink: true,
+            choices: [
+                { value: 'cancel', label: '취소', kind: 'secondary' },
+                { value: 'format', label: '모든 데이터를 지우고 NetMD로 포맷', kind: 'danger' },
+            ],
+            cancelValue: 'cancel',
         });
-        if (confirmation.response !== 1) {
+        if (confirmation !== 'format') {
             return { ok: false, cancelled: true, message: '포맷을 취소했습니다.' };
         }
         webusb.setPreferredDevice(hiMDDevice);
@@ -1222,7 +1344,8 @@ async function integrate(window) {
             webusb.clearPreferredDevice();
             Promise.resolve(driver?.close()).catch(() => { });
         }
-    });
+    };
+    electron_1.ipcMain.handle('formatStandardMDToNetMD', formatStandardMDToNetMD);
     electron_1.ipcMain.handle('_switchToFactory', async () => {
         factoryIface = await service.factory();
         if (alreadySwitched)
@@ -1264,6 +1387,102 @@ async function integrate(window) {
     const himdService = new translations_1.EWMDHiMD({ debug: true });
     const transferMethods = new Set(['prepareUpload', 'upload', 'finalizeUpload', 'download']);
     const hasActiveTransfer = serviceObject => [...(serviceObject.__activeIpcMethods ?? [])].some(method => transferMethods.has(method));
+    let rendererReportedTransferStall = false;
+    let rendererReportedTransferActive = false;
+    let forceClosingStalledTransfer = false;
+    let closeConfirmationPending = false;
+    let suppressRepeatedTransferClosePrompt = false;
+    let transferClosePromptResetTimer;
+    let safeDisconnectClosePending = false;
+    let safeDisconnectCloseAllowed = false;
+    const confirmForceQuitStalledTransfer = async () => {
+        if (closeConfirmationPending)
+            return false;
+        closeConfirmationPending = true;
+        try {
+            const result = await showRendererWarning(window, {
+                title: '멈춘 전송 강제 종료',
+                message: '전송이 끝나지 않았습니다. 앱을 강제로 종료할까요?',
+                detail: '전송 중이던 곡은 손상되거나 사라질 수 있습니다. 앱이 닫힌 뒤에도 기기의 쓰기 표시가 계속되면 전원과 디스크는 그대로 두고 USB 케이블만 분리하세요.',
+                choices: [
+                    { value: 'wait', label: '계속 기다리기', kind: 'secondary' },
+                    { value: 'force', label: '앱 강제 종료', kind: 'danger' },
+                ],
+                cancelValue: 'wait',
+            });
+            if (result !== 'force') {
+                suppressRepeatedTransferClosePrompt = true;
+                return false;
+            }
+            forceClosingStalledTransfer = true;
+            appendDiagnosticLog('Stalled transfer force quit confirmed', { at: Date.now() });
+            setImmediate(() => electron_1.app.exit(1));
+            return true;
+        }
+        finally {
+            closeConfirmationPending = false;
+        }
+    };
+    window.on('close', event => {
+        if (forceClosingStalledTransfer || relaunching || safeDisconnectCloseAllowed)
+            return;
+        appendDiagnosticLog('Window close requested', {
+            rendererReportedTransferActive,
+            netmdActiveMethods: [...(service.__activeIpcMethods ?? [])],
+            himdActiveMethods: [...(himdService.__activeIpcMethods ?? [])],
+            suppressRepeatedTransferClosePrompt,
+            at: Date.now(),
+        });
+        if (rendererReportedTransferActive || hasActiveTransfer(service) || hasActiveTransfer(himdService)) {
+            event.preventDefault();
+            if (suppressRepeatedTransferClosePrompt)
+                return;
+            void confirmForceQuitStalledTransfer();
+            return;
+        }
+        if (!service.netmdInterface && !himdService.fsDriver && !himdService.himd)
+            return;
+        event.preventDefault();
+        if (safeDisconnectClosePending)
+            return;
+        safeDisconnectClosePending = true;
+        appendDiagnosticLog('Safe MiniDisc app close started', { at: Date.now() });
+        void clearMiniDiscConnections().catch(error => {
+            appendDiagnosticLog('Safe MiniDisc app close cleanup failed', error);
+        }).finally(() => {
+            safeDisconnectClosePending = false;
+            safeDisconnectCloseAllowed = true;
+            appendDiagnosticLog('Safe MiniDisc app close completed', { at: Date.now() });
+            window.close();
+        });
+    });
+    electron_1.ipcMain.removeHandler('setTransferStalled');
+    electron_1.ipcMain.handle('setTransferStalled', (_event, value) => {
+        rendererReportedTransferStall = Boolean(value);
+        return true;
+    });
+    electron_1.ipcMain.removeHandler('setTransferActive');
+    electron_1.ipcMain.handle('setTransferActive', (_event, value) => {
+        rendererReportedTransferActive = Boolean(value);
+        if (transferClosePromptResetTimer) {
+            clearTimeout(transferClosePromptResetTimer);
+            transferClosePromptResetTimer = undefined;
+        }
+        if (!rendererReportedTransferActive) {
+            transferClosePromptResetTimer = setTimeout(() => {
+                transferClosePromptResetTimer = undefined;
+                if (!rendererReportedTransferActive &&
+                    !hasActiveTransfer(service) &&
+                    !hasActiveTransfer(himdService))
+                    suppressRepeatedTransferClosePrompt = false;
+            }, 3000);
+        }
+        appendDiagnosticLog('Renderer transfer state changed', {
+            active: rendererReportedTransferActive,
+            at: Date.now(),
+        });
+        return true;
+    });
     electron_1.ipcMain.handle('setRH1KoreanTitleExperiment', async (_, requestedState) => {
         const enabled = Boolean(requestedState);
         if (himdService.atdata !== null || hasActiveTransfer(himdService)) {
@@ -1292,7 +1511,7 @@ async function integrate(window) {
         };
     });
     const clearMiniDiscConnections = async () => {
-        if (himdService.atdata !== null || hasActiveTransfer(service) || hasActiveTransfer(himdService)) {
+        if (rendererReportedTransferActive || himdService.atdata !== null || hasActiveTransfer(service) || hasActiveTransfer(himdService)) {
             return {
                 ok: false,
                 busy: true,
@@ -1301,7 +1520,12 @@ async function integrate(window) {
         }
         const warnings = [];
         try {
-            await withTimeout(service.finalize(), 4000, 'NetMD 연결 정리 시간이 초과되었습니다.');
+            appendDiagnosticLog('NetMD safe disconnect started', {
+                deviceName: service.netmdInterface?.netMd?.getDeviceName?.(),
+                at: Date.now(),
+            });
+            await withTimeout(service.finalizeForDisconnect(), 10000, 'NetMD 연결 정리 시간이 초과되었습니다.');
+            appendDiagnosticLog('NetMD safe disconnect completed', { at: Date.now() });
         }
         catch (error) {
             if (service.netmdInterface)
@@ -1332,7 +1556,7 @@ async function integrate(window) {
         };
     };
     electron_1.ipcMain.handle('returnToModeSelection', async () => clearMiniDiscConnections());
-    electron_1.ipcMain.handle('formatStandardMDToHiMD', async () => {
+    const formatStandardMDToHiMD = async () => {
         if (process.platform !== 'win32') {
             return { ok: false, message: '이 기능은 Windows 전용입니다.' };
         }
@@ -1403,8 +1627,7 @@ async function integrate(window) {
                     message: '디스크가 쓰기 금지 상태이거나 포맷 가능한 미디어가 아닙니다.',
                 };
             }
-            const confirmation = await electron_1.dialog.showMessageBox(window, {
-                type: 'warning',
+            const confirmation = await showRendererWarning(window, {
                 title: 'Hi-MD로 포맷',
                 message: '현재 일반 MD를 Hi-MD 형식으로 초기화하시겠습니까?',
                 detail: [
@@ -1412,14 +1635,15 @@ async function integrate(window) {
                     '',
                     `대상 기기: ${targetDevice.modelHint} (${targetDevice.vendorIdHex}:${targetDevice.productIdHex})`,
                     '포맷 뒤 기기는 Hi-MD USB 인터페이스로 다시 연결됩니다.',
-                    '해당 Hi-MD USB ID에 WinUSB를 처음 설치하는 경우 추가 안내가 나타날 수 있습니다.',
+                    '설치된 범용 WinUSB 드라이버가 전환된 Hi-MD USB ID에도 자동 적용됩니다.',
                 ].join('\n'),
-                buttons: ['취소', '모든 데이터를 지우고 Hi-MD로 포맷'],
-                defaultId: 0,
-                cancelId: 0,
-                noLink: true,
+                choices: [
+                    { value: 'cancel', label: '취소', kind: 'secondary' },
+                    { value: 'format', label: '모든 데이터를 지우고 Hi-MD로 포맷', kind: 'danger' },
+                ],
+                cancelValue: 'cancel',
             });
-            if (confirmation.response !== 1)
+            if (confirmation !== 'format')
                 return { ok: false, cancelled: true, message: '포맷을 취소했습니다.' };
             let commandError;
             try {
@@ -1493,7 +1717,48 @@ async function integrate(window) {
             if (!switchRequested)
                 Promise.resolve(netmdInterface?.netMd.finalize()).catch(() => { });
         }
+    };
+    electron_1.ipcMain.handle('formatStandardMDToHiMD', formatStandardMDToHiMD);
+    electron_1.ipcMain.handle('formatTimedOutMiniDiscMedia', async (_, targetFormat) => {
+        if (targetFormat !== 'himd' && targetFormat !== 'netmd') {
+            return { ok: false, message: '알 수 없는 MiniDisc 포맷 형식입니다.' };
+        }
+        const diagnostics = (0, device_diagnostics_1.getMiniDiscDiagnostics)();
+        const sourceMode = targetFormat === 'himd' ? 'himd' : 'netmd';
+        const candidates = diagnostics.devices.filter(device => device.mode === sourceMode);
+        if (candidates.length !== 1) {
+            return {
+                ok: false,
+                message: candidates.length === 0
+                    ? '포맷할 MiniDisc 기기를 찾지 못했습니다. USB를 다시 연결한 뒤 시도해 주세요.'
+                    : '안전을 위해 포맷할 MiniDisc 기기 하나만 USB에 연결해 주세요.',
+            };
+        }
+        const switchResult = targetFormat === 'himd'
+            ? await switchHiMDInterfaceToNetMD(candidates[0])
+            : await switchNetMDInterfaceToHiMD(candidates[0]);
+        clearPendingMiniDiscMode();
+        if (!switchResult.ok) {
+            return {
+                ok: false,
+                message: `포맷 준비를 위해 USB 모드를 전환하지 못했습니다.\n${switchResult.message}`,
+            };
+        }
+        const result = targetFormat === 'himd'
+            ? await formatStandardMDToHiMD()
+            : await formatStandardMDToNetMD();
+        if (result?.ok && result.switchRequested) {
+            rememberPendingMiniDiscMode(targetFormat);
+            return {
+                ...result,
+                restartRequired: true,
+                message: `${result.message}\n\n새 USB 모드로 자동 연결하기 위해 프로그램을 다시 시작합니다.`,
+            };
+        }
+        return result;
     });
+    window.webContents.on('render-process-gone', (_event, details) => appendDiagnosticLog('RENDERER process gone', details));
+    window.webContents.on('unresponsive', () => appendDiagnosticLog('RENDERER unresponsive', { url: window.webContents.getURL() }));
     let keyData = undefined;
     try {
         keyData = new Uint8Array(fs_1.default.readFileSync(path_1.default.join(electron_1.app.getPath('userData'), 'EKBROOTS.DES')));
@@ -1503,7 +1768,9 @@ async function integrate(window) {
     }
     const nwService = new networkwm_service_1.NetworkWMService(keyData);
     if (process.platform !== 'darwin') {
-        const himdDeflist = traverseObject(window, () => himdService, "_himd_");
+        const himdDeflist = traverseObject(window, () => himdService, "_himd_", {
+            rememberMode: rememberPendingMiniDiscMode,
+        });
         electron_1.ipcMain.handle('_himd__definedParameters', () => himdDeflist);
         const nwDeflist = traverseObject(window, () => nwService, "_nwjs_");
         electron_1.ipcMain.handle('_nwjs__definedParameters', () => nwDeflist);
@@ -1640,22 +1907,127 @@ async function integrate(window) {
     const addKnownDeviceCB = webusb.addKnownDevice.bind(webusb);
     nwService.deviceConnectedCallback = addKnownDeviceCB;
     himdService.deviceConnectedCallback = addKnownDeviceCB;
+    let pendingUsbDisconnectReloadTimer;
     webusb.ondisconnect = event => {
-        if ([service, himdService, nwService].some(e => e.isDeviceConnected(event.device))) {
-            reload(window);
+        const matchedService = [service, himdService, nwService].some(currentService => {
+            try {
+                return currentService.isDeviceConnected(event.device);
+            }
+            catch (error) {
+                appendDiagnosticLog('USB disconnect service match failed', error);
+                return false;
+            }
+        });
+        const recentTransferLoss = recentUsbTransferFailure !== null &&
+            Date.now() - recentUsbTransferFailure.at < 10000;
+        const transferState = {
+            matchedService,
+            netmdTransfer: hasActiveTransfer(service),
+            himdTransfer: hasActiveTransfer(himdService),
+            recentTransferLoss,
+            recentUsbTransferFailure,
+            vendorId: event.device?.vendorId,
+            productId: event.device?.productId,
+            productName: event.device?.productName,
+        };
+        appendDiagnosticLog('USB disconnect', transferState);
+        if (!matchedService)
+            return;
+        if (transferState.netmdTransfer || transferState.himdTransfer || recentTransferLoss) {
+            webusb.clearPreferredDevice();
+            recentUsbTransferFailure = null;
+            void showRendererWarning(window, {
+                title: 'N1 전송 중 USB 연결이 끊어졌습니다',
+                message: '전송을 중단하고 앱의 자동 재시작을 막았습니다.',
+                detail: '진행 중이던 곡은 이어서 전송할 수 없습니다. USB 케이블과 기기 전원을 확인한 뒤 다시 연결하고 전송해 주세요. 같은 현상이 반복되면 진단 로그를 확인해 원인을 더 좁힐 수 있습니다.',
+            });
+            return;
         }
+        if (pendingUsbDisconnectReloadTimer)
+            clearTimeout(pendingUsbDisconnectReloadTimer);
+        pendingUsbDisconnectReloadTimer = setTimeout(() => {
+            pendingUsbDisconnectReloadTimer = undefined;
+            if (hasActiveTransfer(service) || hasActiveTransfer(himdService)) {
+                appendDiagnosticLog('USB disconnect relaunch suppressed by active transfer', {
+                    vendorId: event.device?.vendorId,
+                    productId: event.device?.productId,
+                });
+                return;
+            }
+            reload(window);
+        }, 2500);
     };
+    electron_1.ipcMain.removeHandler('appendDiagnosticLog');
+    electron_1.ipcMain.handle('appendDiagnosticLog', (_event, category, value) => appendDiagnosticLog(`RENDERER ${category}`, value));
+    electron_1.ipcMain.removeHandler('writeClipboardText');
+    electron_1.ipcMain.handle('writeClipboardText', (_event, value) => {
+        electron_1.clipboard.writeText(String(value ?? ''));
+        return true;
+    });
+    electron_1.ipcMain.removeHandler('forceQuitStalledTransfer');
+    electron_1.ipcMain.handle('forceQuitStalledTransfer', confirmForceQuitStalledTransfer);
+    // Windows can keep node-usb/libusb's native device context stale after a
+    // suspend/resume cycle even though PnP has brought the Hi-MD interface back.
+    // A renderer reload is not sufficient because it leaves that native context
+    // in this process alive. Relaunch once Windows has had time to re-enumerate
+    // USB, which avoids requiring a full Windows reboot.
+    let powerSuspendObserved = false;
+    let powerResumeRecoveryTimer;
+    const handlePowerSuspend = () => {
+        powerSuspendObserved = true;
+        webusb.clearPreferredDevice();
+        console.log('[USB POWER] Suspend detected; USB recovery armed.');
+    };
+    const scheduleUsbResumeRecovery = (source) => {
+        if (!powerSuspendObserved || relaunching || powerResumeRecoveryTimer)
+            return;
+        powerSuspendObserved = false;
+        console.log(`[USB POWER] ${source} detected; relaunching after USB re-enumeration.`);
+        powerResumeRecoveryTimer = setTimeout(() => {
+            powerResumeRecoveryTimer = undefined;
+            if (!window.isDestroyed())
+                reload(window);
+        }, 1800);
+    };
+    const handlePowerResume = () => scheduleUsbResumeRecovery('Resume');
+    const handleScreenUnlock = () => scheduleUsbResumeRecovery('Unlock');
+    electron_1.powerMonitor.on('suspend', handlePowerSuspend);
+    electron_1.powerMonitor.on('resume', handlePowerResume);
+    electron_1.powerMonitor.on('unlock-screen', handleScreenUnlock);
+    window.once('closed', () => {
+        if (pendingUsbDisconnectReloadTimer)
+            clearTimeout(pendingUsbDisconnectReloadTimer);
+        if (powerResumeRecoveryTimer)
+            clearTimeout(powerResumeRecoveryTimer);
+        electron_1.powerMonitor.removeListener('suspend', handlePowerSuspend);
+        electron_1.powerMonitor.removeListener('resume', handlePowerResume);
+        electron_1.powerMonitor.removeListener('unlock-screen', handleScreenUnlock);
+    });
 }
 (0, electron_context_menu_1.default)({
     showInspectElement: false,
 });
 electron_1.app.whenReady().then(() => {
     electron_1.protocol.registerFileProtocol('sandbox', (rq, callback) => {
-        const filePath = path_1.default.normalize(rq.url.substring('sandbox://'.length));
-        if (path_1.default.isAbsolute(filePath) || filePath.includes('..')) {
-            electron_1.app.quit();
+        let decodedPath;
+        try {
+            decodedPath = decodeURI(rq.url.substring('sandbox://'.length));
         }
-        const tgt = decodeURI(getOfRenderer(filePath));
+        catch {
+            callback({ error: -10 });
+            return;
+        }
+        const filePath = path_1.default.normalize(decodedPath.replace(/^[/\\]+/, ''));
+        if (path_1.default.isAbsolute(filePath) || /^[a-zA-Z]:/.test(filePath) || filePath.split(path_1.default.sep).includes('..')) {
+            appendDiagnosticLog('SANDBOX unsafe path rejected', {
+                url: rq.url,
+                normalizedPath: filePath,
+                at: Date.now(),
+            });
+            callback({ error: -10 });
+            return;
+        }
+        const tgt = getOfRenderer(filePath);
         console.log(`[SANDBOX]: Requested ${tgt}`);
         callback(tgt);
     });

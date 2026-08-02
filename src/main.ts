@@ -521,11 +521,20 @@ contextMenu({
 
 app.whenReady().then(() => {
     protocol.registerFileProtocol('sandbox', (rq, callback) => {
-        const filePath = path.normalize(rq.url.substring('sandbox://'.length));
-        if (path.isAbsolute(filePath) || filePath.includes('..')) {
-            app.quit();
+        let decodedPath: string;
+        try {
+            decodedPath = decodeURI(rq.url.substring('sandbox://'.length));
+        } catch {
+            callback({ error: -10 });
+            return;
         }
-        const tgt = decodeURI(getOfRenderer(filePath));
+        const filePath = path.normalize(decodedPath.replace(/^[/\\]+/, ''));
+        if (path.isAbsolute(filePath) || /^[a-zA-Z]:/.test(filePath) || filePath.split(path.sep).includes('..')) {
+            console.warn(`[SANDBOX]: Rejected unsafe path ${rq.url}`);
+            callback({ error: -10 });
+            return;
+        }
+        const tgt = getOfRenderer(filePath);
         console.log(`[SANDBOX]: Requested ${tgt}`);
         callback(tgt);
     });

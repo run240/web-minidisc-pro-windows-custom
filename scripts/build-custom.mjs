@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -133,37 +133,32 @@ copy(join(root, 'custom-overrides', 'renderer'), renderer);
 const extras = join(root, 'extras');
 mkdirSync(extras, { recursive: true });
 copy(
-  join(root, 'custom-overrides', 'extras', 'WMDP-DRIVER-HELPER-NOTICE.txt'),
-  join(extras, 'WMDP-DRIVER-HELPER-NOTICE.txt'),
+  join(root, 'custom-overrides', 'extras', 'WMDP-WINUSB-DRIVER-NOTICE.txt'),
+  join(extras, 'WMDP-WINUSB-DRIVER-NOTICE.txt'),
 );
 copy(
   join(root, 'custom-overrides', 'extras', 'LIBWDI-COPYING-LGPLv3.txt'),
   join(extras, 'LIBWDI-COPYING-LGPLv3.txt'),
 );
+rmSync(join(extras, 'drivers'), { recursive: true, force: true });
+copy(
+  join(root, 'custom-overrides', 'extras', 'drivers'),
+  join(extras, 'drivers'),
+);
 
-const helper = join(root, 'third_party', 'libwdi', 'build-x64', 'wmdp-driver-helper.exe');
-if (!existsSync(helper)) {
-  throw new Error(
-    'Driver helper is missing. Build third_party\\libwdi\\build-wmdp-helper.cmd first.',
-  );
-}
-copy(helper, join(extras, 'wmdp-driver-helper.exe'));
-
+// Older custom builds bundled libwdi's generated installer executable. Current
+// Defender intelligence flags that legacy binary, so the release contains only
+// the pre-generated universal INF/CAT/CER package and Windows' own pnputil path.
+rmSync(join(extras, 'wmdp-driver-helper.exe'), { force: true });
+rmSync(join(extras, 'WMDP-DRIVER-HELPER-NOTICE.txt'), { force: true });
 const libwdiArchive = join(extras, 'LIBWDI-SOURCE-v1.5.1-wmdp.zip');
 rmSync(libwdiArchive, { force: true });
-run('tar', [
-  '-a',
-  '-cf',
-  libwdiArchive,
-  '-C',
-  join(root, 'third_party', 'libwdi'),
-  '.',
-]);
 
 copy(
   join(root, 'custom-overrides', 'MODIFIED-BUILD-NOTICE.txt'),
   join(root, 'MODIFIED-BUILD-NOTICE.txt'),
 );
+rmSync(join(root, 'SOURCE-MODIFICATIONS'), { recursive: true, force: true });
 copy(join(root, 'custom-overrides'), join(root, 'SOURCE-MODIFICATIONS'));
 
 console.log('Custom source tree is ready for electron-builder.');
