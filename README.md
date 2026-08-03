@@ -10,7 +10,7 @@ NetMD/Hi-MD device support and an integrated WinUSB installation flow.
 
 ## Status
 
-The source and GitHub Actions build pipeline are public. Windows Custom V7 is
+The source and GitHub Actions build pipeline are public. Web MiniDisc Pro 1.5.4 — Windows Custom R7 is
 available from [GitHub Releases](https://github.com/run240/web-minidisc-pro-windows-custom/releases)
 as a portable x64 ZIP. The current portable build is unsigned; open-source
 code-signing setup and Windows 11 Smart App Control verification are still in
@@ -47,7 +47,7 @@ Free code signing provided by
 
 ### Windows home and mode selection
 
-![Web MiniDisc Pro Windows Custom V7 home](docs/images/v7-home.png)
+![Web MiniDisc Pro 1.5.4 Windows Custom R7 home](docs/images/v7-home.png)
 
 ### MiniDisc label maker
 
@@ -58,7 +58,7 @@ Free code signing provided by
 - `src/`: ElectronWMD source
 - `webminidisc/`: pinned Web MiniDisc Pro submodule
 - `third_party/libwdi/`: complete corresponding source for the WinUSB helper
-- `custom-overrides/`: exact V7 generated-file modifications and label-maker assets
+- `custom-overrides/`: exact Windows Custom R7 generated-file modifications and label-maker assets
 - `.github/workflows/build-signpath.yml`: Windows build and SignPath submission
 - `signpath-artifact-configuration.xml`: Authenticode signing scope
 
@@ -67,7 +67,7 @@ Base revisions:
 - ElectronWMD: `a3f30f8ae3bb022aa8aa58776dc7e473c09ad066`
 - Web MiniDisc Pro: `30c3045155a1c057171506aaf3ffee64552df679`
 
-The current V7 modifications were originally made against generated output.
+The current Windows Custom R7 modifications were originally made against generated output.
 They are kept as a transparent build overlay so the existing release can be
 reproduced. Future changes should be moved into the TypeScript/React sources
 where practical.
