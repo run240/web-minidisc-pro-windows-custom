@@ -10,9 +10,11 @@ NetMD/Hi-MD device support and an integrated WinUSB installation flow.
 
 ## Status
 
-The source and GitHub Actions build pipeline are public. Windows release
-binaries will be published after the open-source code-signing setup has been
-approved and verified on Windows 11 with Smart App Control enabled.
+The source and GitHub Actions build pipeline are public. Windows Custom V7 is
+available from [GitHub Releases](https://github.com/run240/web-minidisc-pro-windows-custom/releases)
+as a portable x64 ZIP. The current portable build is unsigned; open-source
+code-signing setup and Windows 11 Smart App Control verification are still in
+progress.
 
 Free code signing provided by
 [SignPath.io](https://signpath.io/), certificate by
@@ -25,6 +27,8 @@ Free code signing provided by
 - Automatic RH1 NetMD/Hi-MD USB interface switching without replugging
 - Automatic mode reconnection after the application restarts
 - Multiple connected-device selection
+- MiniDisc disc, case, and spine label designer with PDF, PNG, SVG, and project export
+- Import the track list already loaded from a connected NetMD or Hi-MD into a label
 - Korean UI and filename romanization improvements
 - MD Squirrel assistant for creating English-tagged copies of local audio
 - Apple Music (US) metadata lookup for English track and artist names, with
@@ -32,17 +36,29 @@ Free code signing provided by
 - Original audio preservation: copies are written to a sibling `[English]`
   folder without re-encoding
 - Hi-MD and NetMD temporary metadata editing
+- Batched title, album, artist, order, group, and disc-name editing with post-write verification
 - Hi-MD connection-state cleanup and safer timeout recovery
 - Transfer-stall diagnostics and troubleshooting information
-- Windows-focused theme, icons, loading screen, dialogs, and context menus
+- Windows-focused theme, icons, loading screen, dialogs, and context menus,
+  including light-theme text contrast fixes
 - Window position and monitor restoration across mode changes
+
+## Screenshots
+
+### Windows home and mode selection
+
+![Web MiniDisc Pro Windows Custom V7 home](docs/images/v7-home.png)
+
+### MiniDisc label maker
+
+![MiniDisc label maker](docs/images/v7-label-maker.png)
 
 ## Source layout
 
 - `src/`: ElectronWMD source
 - `webminidisc/`: pinned Web MiniDisc Pro submodule
 - `third_party/libwdi/`: complete corresponding source for the WinUSB helper
-- `custom-overrides/`: exact V3 generated-file modifications
+- `custom-overrides/`: exact V7 generated-file modifications and label-maker assets
 - `.github/workflows/build-signpath.yml`: Windows build and SignPath submission
 - `signpath-artifact-configuration.xml`: Authenticode signing scope
 
@@ -51,7 +67,7 @@ Base revisions:
 - ElectronWMD: `a3f30f8ae3bb022aa8aa58776dc7e473c09ad066`
 - Web MiniDisc Pro: `30c3045155a1c057171506aaf3ffee64552df679`
 
-The current V3 modifications were originally made against generated output.
+The current V7 modifications were originally made against generated output.
 They are kept as a transparent build overlay so the existing release can be
 reproduced. Future changes should be moved into the TypeScript/React sources
 where practical.

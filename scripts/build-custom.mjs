@@ -98,10 +98,18 @@ function patchGeneratedHiMDService() {
             this.dropCachedContentList();
         }
     }`;
-  if (!text.includes(pairBefore) || !text.includes(finalizeBefore)) {
+  const batchMarker = `    async deleteTracks(indexes: number[]): Promise<void> {`;
+  const batchMethod = readFileSync(
+    join(root, 'custom-overrides', 'patches', 'himd-apply-edit-batch.ts.txt'),
+    'utf8',
+  ).trimEnd();
+  if (!text.includes(pairBefore) || !text.includes(finalizeBefore) || !text.includes(batchMarker)) {
     throw new Error('The pinned Hi-MD service no longer matches the reviewed patch.');
   }
-  text = text.replace(pairBefore, pairAfter).replace(finalizeBefore, finalizeAfter);
+  text = text
+    .replace(pairBefore, pairAfter)
+    .replace(finalizeBefore, finalizeAfter)
+    .replace(batchMarker, `${batchMethod}\n${batchMarker}`);
   writeFileSync(destination, text, 'utf8');
 }
 
@@ -129,6 +137,10 @@ inlineMDSquirrelPreload();
 // the upstream submodule first would only be overwritten here and also makes
 // the Windows build depend on the upstream submodule's stale package lock.
 copy(join(root, 'custom-overrides', 'renderer'), renderer);
+copy(
+  join(root, 'custom-overrides', 'md-label-maker'),
+  join(renderer, 'md-label-maker'),
+);
 
 const extras = join(root, 'extras');
 mkdirSync(extras, { recursive: true });

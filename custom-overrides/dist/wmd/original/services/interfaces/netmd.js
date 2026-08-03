@@ -437,7 +437,16 @@ class NetMDUSBService extends NetMDService {
         this.dropCachedContentList();
     }
     async applyEditBatch(batch) {
-        const before = await this.listContent(true);
+        const before = await this.listContentUsingCache();
+        const discTitleRequest = batch === null || batch === void 0 ? void 0 : batch.discTitle;
+        const expectedDiscTitle = discTitleRequest
+            ? sanitizeNetMDHalfWidthTitle(discTitleRequest.title)
+            : before.title;
+        const expectedFullWidthDiscTitle = discTitleRequest
+            ? sanitizeNetMDFullWidthTitle(discTitleRequest.fullWidthTitle)
+            : before.fullWidthTitle;
+        const discTitleChanged = expectedDiscTitle !== before.title ||
+            expectedFullWidthDiscTitle !== before.fullWidthTitle;
         const trackCount = before.groups.reduce((count, group) => count + group.tracks.length, 0);
         const order = Array.isArray(batch === null || batch === void 0 ? void 0 : batch.order) ? batch.order.map(Number) : [];
         if (order.length !== trackCount ||
@@ -446,6 +455,14 @@ class NetMDUSBService extends NetMDService {
             throw new Error('NetMD 편집 목록의 트랙 순서가 올바르지 않습니다.');
         }
         const currentOrder = Array.from({ length: trackCount }, (_, index) => index);
+        const orderChanged = order.some((index, position) => index !== position);
+        const groupShape = groups => JSON.stringify((groups !== null && groups !== void 0 ? groups : []).map(group => ({
+            title: group.title,
+            fullWidthTitle: group.fullWidthTitle,
+            tracks: (group.tracks !== null && group.tracks !== void 0 ? group.tracks : []).map(track => track.index),
+        })));
+        const groupsChanged = Array.isArray(batch === null || batch === void 0 ? void 0 : batch.groups) &&
+            groupShape(batch.groups) !== groupShape(before.groups);
         const originalTracks = before.groups
             .flatMap(group => group.tracks)
             .sort((a, b) => a.index - b.index);
@@ -468,6 +485,11 @@ class NetMDUSBService extends NetMDService {
         const expectedSignatures = order.map(originalIndex => trackSignature(editedTracks[originalIndex]));
         let writeStarted = false;
         try {
+            if (discTitleChanged) {
+                await this.netmdInterface.setDiscTitle(expectedDiscTitle);
+                await this.netmdInterface.setDiscTitle(expectedFullWidthDiscTitle, true);
+                writeStarted = true;
+            }
             for (const edit of metadata) {
                 const originalIndex = Number(edit.originalIndex);
                 const title = sanitizeNetMDHalfWidthTitle(edit.title);
@@ -476,6 +498,21 @@ class NetMDUSBService extends NetMDService {
                 await this.netmdInterface.setTrackTitle(originalIndex, fullWidthTitle, true);
                 await (0, utils_2.sleep)(100);
                 writeStarted = true;
+            }
+            if (!orderChanged && !groupsChanged) {
+                const result = JSON.parse(JSON.stringify(before));
+                result.title = expectedDiscTitle;
+                result.fullWidthTitle = expectedFullWidthDiscTitle;
+                const resultTracks = result.groups.flatMap(group => group.tracks);
+                for (const edit of metadata) {
+                    const track = resultTracks.find(candidate => candidate.index === Number(edit.originalIndex));
+                    if (!track)
+                        continue;
+                    track.title = sanitizeNetMDHalfWidthTitle(edit.title);
+                    track.fullWidthTitle = sanitizeNetMDFullWidthTitle(edit.fullWidthTitle);
+                }
+                this.cachedContentList = result;
+                return JSON.parse(JSON.stringify(result));
             }
             for (let destination = 0; destination < order.length; destination++) {
                 const source = currentOrder.indexOf(order[destination]);
@@ -491,7 +528,13 @@ class NetMDUSBService extends NetMDService {
             this.dropCachedContentList();
             if (Array.isArray(batch === null || batch === void 0 ? void 0 : batch.groups)) {
                 const refreshed = await this.listContentUsingCache();
-                refreshed.groups = batch.groups;
+                refreshed.groups = batch.groups.map(group => ({
+                    ...group,
+                    title: group.title === null ? null : sanitizeNetMDHalfWidthTitle(group.title),
+                    fullWidthTitle: group.fullWidthTitle === null
+                        ? null
+                        : sanitizeNetMDFullWidthTitle(group.fullWidthTitle),
+                }));
                 this.cachedContentList = refreshed;
                 await (0, netmd_js_1.rewriteDiscGroups)(this.netmdInterface, convertDiscToNJS(refreshed));
                 writeStarted = true;
@@ -501,6 +544,9 @@ class NetMDUSBService extends NetMDService {
             const resultCount = result.groups.reduce((count, group) => count + group.tracks.length, 0);
             if (resultCount !== trackCount) {
                 throw new Error(`적용 후 트랙 수가 ${trackCount}개에서 ${resultCount}개로 달라졌습니다.`);
+            }
+            if (result.title !== expectedDiscTitle || result.fullWidthTitle !== expectedFullWidthDiscTitle) {
+                throw new Error('적용 후 NetMD 디스크 이름이 요청한 결과와 다릅니다.');
             }
             const actualSignatures = result.groups
                 .flatMap(group => group.tracks)

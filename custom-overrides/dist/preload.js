@@ -1912,9 +1912,8 @@ exports.CHANGELOG = [
         refreshPanelState();
     };
     const installNetMDOriginalTitleOption = () => {
-        const isHiMDPage = Array.from(document.querySelectorAll('h1')).some(heading => (heading.textContent || '').trim().startsWith('HiMD ('));
         const dialog = document.getElementById('convert-dialog-slide-title')?.closest('[role="dialog"]');
-        if (isHiMDPage || !dialog || dialog.querySelector('[data-netmd-original-title-option]'))
+        if (!dialog || dialog.querySelector('[data-netmd-original-title-option]'))
             return;
         const content = dialog.querySelector('.MuiDialogContent-root');
         if (!content)
@@ -1940,7 +1939,7 @@ exports.CHANGELOG = [
         Object.assign(badge.style, { marginLeft: 'auto', padding: '2px 7px', borderRadius: '10px', background: '#a76832', color: '#fff', fontSize: '11px' });
         row.append(input, label, badge);
         const description = document.createElement('div');
-        description.textContent = '켜면 우리가 추가한 로마자 변환만 건너뛰고 Web MiniDisc 원본의 제목 처리 함수를 그대로 사용합니다. 기기에서 글자가 깨질 수 있습니다.';
+        description.textContent = '켜면 우리가 추가한 로마자 변환만 건너뛰고 Web MiniDisc 원본의 제목 처리 함수를 그대로 사용합니다. NetMD와 Hi-MD 모두에 적용되며 기기에 따라 글자가 깨질 수 있습니다.';
         Object.assign(description.style, { margin: '7px 0 0 28px', color: 'rgba(255,224,191,.78)', fontSize: '12px', lineHeight: '1.45' });
         const status = document.createElement('div');
         Object.assign(status.style, { margin: '7px 0 0 28px', color: '#e7ad78', fontSize: '11px' });
@@ -2240,14 +2239,67 @@ exports.CHANGELOG = [
             '</svg>',
         ].join('');
     };
+    let pendingEditRequestSequence = 0;
+    const showModeExitProgress = () => {
+        document.querySelector('[data-wmd-mode-exit-progress]')?.remove();
+        if (!document.getElementById('wmd-mode-exit-progress-style')) {
+            const style = document.createElement('style');
+            style.id = 'wmd-mode-exit-progress-style';
+            style.textContent = `
+                @keyframes wmdModeExitSpin { to { transform: rotate(360deg); } }
+                [data-wmd-mode-exit-progress] { position: fixed; inset: 0; z-index: 2147483646; display: flex; align-items: center; justify-content: center; background: rgba(12, 12, 16, .82); backdrop-filter: blur(3px); }
+                .wmd-mode-exit-card { min-width: 340px; padding: 28px 34px; border: 1px solid rgba(208, 78, 137, .45); border-radius: 14px; background: #201f25; color: #f5f1f4; text-align: center; box-shadow: 0 18px 48px rgba(0,0,0,.5); }
+                .wmd-mode-exit-spinner { width: 34px; height: 34px; margin: 0 auto 18px; border: 3px solid rgba(208,78,137,.22); border-top-color: #d04e89; border-radius: 50%; animation: wmdModeExitSpin .8s linear infinite; }
+                .wmd-mode-exit-title { font-size: 16px; font-weight: 700; }
+                .wmd-mode-exit-detail { margin-top: 9px; color: rgba(255,255,255,.66); font-size: 13px; }
+            `;
+            document.head.appendChild(style);
+        }
+        const overlay = document.createElement('div');
+        overlay.dataset.wmdModeExitProgress = 'true';
+        overlay.innerHTML = '<div class="wmd-mode-exit-card"><div class="wmd-mode-exit-spinner"></div><div class="wmd-mode-exit-title">편집 내용을 저장하고 연결을 종료하는 중…</div><div class="wmd-mode-exit-detail">완료될 때까지 기기와 USB 케이블을 분리하지 마세요.</div></div>';
+        document.body.appendChild(overlay);
+        return overlay;
+    };
+    const applyPendingRendererEdits = () => new Promise((resolve) => {
+        const requestId = `mode-exit-${Date.now()}-${++pendingEditRequestSequence}`;
+        let timeout;
+        const handleResult = (event) => {
+            if (event.detail?.requestId !== requestId)
+                return;
+            document.removeEventListener('wmd-apply-pending-edits-result', handleResult);
+            if (timeout)
+                clearTimeout(timeout);
+            resolve(Boolean(event.detail?.ok));
+        };
+        document.addEventListener('wmd-apply-pending-edits-result', handleResult);
+        timeout = setTimeout(() => {
+            document.removeEventListener('wmd-apply-pending-edits-result', handleResult);
+            resolve(false);
+        }, 70000);
+        document.dispatchEvent(new CustomEvent('wmd-apply-pending-edits-request', {
+            detail: { requestId },
+        }));
+    });
     const disconnectAndReturnHome = async (exitItem, homeButton) => {
+        const pendingEditButton = Array.from(document.querySelectorAll('button[aria-label="편집 적용"]'))
+            .find(button => !button.disabled);
+        const progressOverlay = showModeExitProgress();
         if (homeButton) {
             homeButton.disabled = true;
-            homeButton.textContent = '⋯';
+        }
+        if (pendingEditButton && !(await applyPendingRendererEdits())) {
+            progressOverlay.remove();
+            if (homeButton) {
+                homeButton.disabled = false;
+                setModeHomeButtonIcon(homeButton);
+            }
+            return;
         }
         try {
             const result = await returnToModeSelection();
             if (!result?.ok) {
+                progressOverlay.remove();
                 window.alert(result?.message || '현재 연결을 정리하지 못했습니다.');
                 if (homeButton) {
                     homeButton.disabled = false;
@@ -2257,6 +2309,7 @@ exports.CHANGELOG = [
             }
             if (result.warning)
                 console.warn('MiniDisc connection cleanup warning:', result.warning);
+            progressOverlay.remove();
             if (exitItem) {
                 modeExitClickBypass.add(exitItem);
                 exitItem.click();
@@ -2270,6 +2323,7 @@ exports.CHANGELOG = [
             }
         }
         catch (error) {
+            progressOverlay.remove();
             window.alert(`모드 선택 화면으로 돌아가는 중 오류가 발생했습니다: ${error instanceof Error ? error.message : String(error)}`);
             if (homeButton) {
                 homeButton.disabled = false;
@@ -3172,6 +3226,93 @@ exports.CHANGELOG = [
         }
     };
     void resumePendingMiniDiscConnection();
+    const installDarkContrastOverrides = () => {
+        if (document.getElementById('wmd-dark-contrast-overrides'))
+            return;
+        if (!document.head) {
+            document.addEventListener('DOMContentLoaded', installDarkContrastOverrides, { once: true });
+            return;
+        }
+        const style = document.createElement('style');
+        style.id = 'wmd-dark-contrast-overrides';
+        style.textContent = `
+            body .MuiDialog-paper,
+            body .MuiPopover-paper,
+            body .MuiMenu-paper {
+                color: #f5f1f4 !important;
+            }
+            body .MuiDialog-paper .MuiTypography-root,
+            body .MuiDialog-paper .MuiDialogContentText-root,
+            body .MuiDialog-paper .MuiFormControlLabel-label,
+            body .MuiDialog-paper .MuiAccordionSummary-root,
+            body .MuiDialog-paper .MuiAccordionDetails-root,
+            body .MuiDialog-paper .MuiTableCell-root,
+            body .MuiDialog-paper .MuiListItemText-primary,
+            body .MuiDialog-paper .MuiInputBase-input,
+            body .MuiDialog-paper .MuiSelect-select {
+                color: #f5f1f4 !important;
+            }
+            body .MuiDialog-paper .MuiFormLabel-root,
+            body .MuiDialog-paper .MuiInputLabel-root,
+            body .MuiDialog-paper .MuiFormHelperText-root,
+            body .MuiDialog-paper .MuiListItemText-secondary {
+                color: #bdb4bb !important;
+            }
+            body .MuiDialog-paper .MuiInput-underline:before,
+            body .MuiDialog-paper .MuiInput-underline:hover:not(.Mui-disabled):before {
+                border-bottom-color: rgba(255,255,255,.38) !important;
+            }
+            body .MuiDialog-paper .MuiInput-underline:after {
+                border-bottom-color: #ef6aaa !important;
+            }
+            body .MuiDialog-paper .MuiToggleButton-root {
+                color: #d7cfd4 !important;
+                border-color: rgba(255,255,255,.18) !important;
+                background: rgba(255,255,255,.035) !important;
+            }
+            body .MuiDialog-paper .MuiToggleButton-root.Mui-selected {
+                color: #ffffff !important;
+                background: #9b3868 !important;
+                box-shadow: inset 0 0 0 1px rgba(255,255,255,.16);
+            }
+            body .MuiDialog-paper .MuiToggleButton-root.Mui-selected:hover {
+                background: #ad4477 !important;
+            }
+            body .MuiDialog-paper .MuiRadio-root,
+            body .MuiDialog-paper .MuiCheckbox-root {
+                color: #aaa1a8 !important;
+            }
+            body .MuiDialog-paper .MuiRadio-root.Mui-checked,
+            body .MuiDialog-paper .MuiCheckbox-root.Mui-checked,
+            body .MuiDialog-paper .MuiCheckbox-root.MuiCheckbox-indeterminate {
+                color: #f06aaa !important;
+            }
+            body .MuiDialog-paper .MuiButton-root {
+                color: #f08ab9 !important;
+                font-weight: 700;
+            }
+            body .MuiDialog-paper .MuiIconButton-root:not(.Mui-disabled) {
+                color: #ece5e9 !important;
+            }
+            body .MuiDialog-paper .Mui-disabled {
+                color: rgba(255,255,255,.34) !important;
+            }
+            body .MuiMenu-paper .MuiMenuItem-root,
+            body .MuiPopover-paper .MuiMenuItem-root {
+                color: #f5f1f4 !important;
+            }
+            body .MuiMenu-paper .MuiMenuItem-root.Mui-selected,
+            body .MuiPopover-paper .MuiMenuItem-root.Mui-selected {
+                color: #ffffff !important;
+                background: #8f315e !important;
+            }
+            body .MuiFormControlLabel-root .MuiCheckbox-root.Mui-checked + .MuiFormControlLabel-label {
+                color: #f5f1f4 !important;
+            }
+        `;
+        document.head.appendChild(style);
+    };
+    installDarkContrastOverrides();
     // MD Squirrel stays isolated from the React tree. The launcher is shown
     // only on the mode-selection screen and opens a self-contained modal.
     require("./md-squirrel-preload").install();

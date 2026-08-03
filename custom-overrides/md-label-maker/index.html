@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MiniDisc 라벨 만들기</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <aside class="panel" aria-label="라벨 설정">
+        <div class="brand-row">
+          <div>
+            <h1>MiniDisc 라벨 만들기</h1>
+            <h3>© 2026 Kai Howells.</h3>
+          </div>
+        </div>
+        <div class="export-actions">
+          <button id="open-save-dialog" class="primary" type="button">저장</button>
+          <button id="load-project" type="button">작업 불러오기</button>
+          <button id="import-md-tracks" class="wide-action" type="button">연결된 MD 목록 가져오기</button>
+          <input id="project-file" class="hidden" type="file" accept="application/json,.json" />
+        </div>
+        <section class="control-section output-label-section">
+          <h2>출력할 라벨</h2>
+          <div class="output-label-options">
+            <label class="checkbox"><input id="output-disc" type="checkbox" checked /> 디스크</label>
+            <label class="checkbox"><input id="output-case" type="checkbox" checked /> 케이스</label>
+            <label class="checkbox"><input id="output-spine" type="checkbox" checked /> 측면</label>
+          </div>
+          <span class="hint">선택한 라벨만 용지 크기에 맞춰 자동으로 배치합니다.</span>
+        </section>
+        <section class="control-section">
+          <h2>인쇄 용지</h2>
+          <label>
+            용지 크기
+            <select id="paper-size">
+              <option value="a4" selected>A4 (210 × 297mm)</option>
+              <option value="photo-4x6">포토 4×6인치 (101.6 × 152.4mm)</option>
+              <option value="mini-2x3">미니 포토 2×3 (50 × 76mm)</option>
+              <option value="card-photo">카드형 포토 (54 × 86mm)</option>
+              <option value="postcard">엽서 (100 × 148mm)</option>
+              <option value="custom">사용자 지정</option>
+            </select>
+            <span id="paper-compatibility" class="hint hidden"></span>
+          </label>
+          <div id="custom-paper-field" class="conditional-field hidden paper-size-fields">
+            <label>
+              가로 (mm)
+              <input id="custom-paper-width" type="number" min="10" max="500" step="0.1" value="100" />
+            </label>
+            <label>
+              세로 (mm)
+              <input id="custom-paper-height" type="number" min="10" max="500" step="0.1" value="148" />
+            </label>
+          </div>
+          <label id="sheet-mode-field">
+            용지 구성
+            <select id="sheet-mode">
+              <option value="repeat">현재 라벨로 용지 채우기</option>
+              <option value="multiple" selected>목록의 여러 라벨 배치</option>
+            </select>
+          </label>
+          <label id="copies-field">
+            <span id="copies-label">A4 한 장당 라벨 수</span>
+            <select id="copies">
+              <option value="1">1-up</option>
+              <option value="2">2-up</option>
+              <option value="4">4-up</option>
+              <option value="6" selected>6-up</option>
+            </select>
+          </label>
+          <div id="label-set-field" class="conditional-field hidden label-set-field">
+            <label>
+              편집할 라벨
+              <select id="selected-label"></select>
+            </label>
+            <div class="mini-actions">
+              <button id="add-label" type="button">추가</button>
+              <button id="duplicate-label" type="button">복제</button>
+              <button id="delete-label" type="button">삭제</button>
+            </div>
+            <span class="hint">라벨마다 제목, 트랙, 이미지, 색상과 배치를 따로 설정할 수 있습니다. 빈 칸에는 첫 번째 라벨이 반복됩니다.</span>
+          </div>
+        </section>
+
+        <section class="control-section">
+          <h2>앨범 정보</h2>
+          <label>
+            앨범명
+            <input id="album" type="text" value="Blue Hour" />
+          </label>
+          <label>
+            아티스트명
+            <input id="artist" type="text" value="Mika Vale" />
+          </label>
+          <label>
+            연도
+            <input id="year" type="text" value="2026" />
+          </label>
+          <label>
+            글꼴
+            <select id="font">
+              <optgroup label="Sans serif">
+                <option>Inter</option>
+                <option>IBM Plex Sans</option>
+                <option>Source Sans 3</option>
+                <option>Roboto Condensed</option>
+                <option>Work Sans</option>
+              </optgroup>
+              <optgroup label="Serif">
+                <option>Libre Baskerville</option>
+                <option>Cormorant Garamond</option>
+                <option>Playfair Display</option>
+                <option>Spectral</option>
+              </optgroup>
+              <optgroup label="Display">
+                <option>Space Grotesk</option>
+                <option>Bebas Neue</option>
+                <option>Archivo Black</option>
+                <option>Oswald</option>
+                <option>Staatliches</option>
+                <option>Unica One</option>
+              </optgroup>
+            </select>
+          </label>
+        </section>
+
+        <section class="control-section two-col">
+          <h2>색상</h2>
+          <label>
+            디스크 배경
+            <input id="disc-bg" type="color" value="#f7f2e8" />
+          </label>
+          <label>
+            디스크 글자
+            <input id="disc-text" type="color" value="#18202a" />
+          </label>
+          <label class="case-only-field">
+            케이스 배경
+            <input id="case-bg" type="color" value="#111820" />
+          </label>
+          <label class="case-only-field">
+            케이스 글자
+            <input id="case-text" type="color" value="#f4f1e8" />
+          </label>
+          <label>
+            측면 배경
+            <input id="spine-bg" type="color" value="#f4f1e8" />
+          </label>
+          <label>
+            측면 글자
+            <input id="spine-text" type="color" value="#111820" />
+          </label>
+        </section>
+
+        <section class="control-section">
+          <h2>디스크 라벨</h2>
+          <label>
+            배치
+            <select id="disc-layout">
+              <option value="square">정사각형 이미지와 제목</option>
+              <option value="image-tracks">작은 이미지와 트랙 목록</option>
+              <option value="background-tracks">배경 이미지와 트랙 목록</option>
+              <option value="tracks">트랙 목록</option>
+              <option value="full">전체 라벨 이미지</option>
+              <option value="text">글자만</option>
+            </select>
+          </label>
+          <label>
+            디스크 이미지
+            <span class="file-control">
+              <input id="disc-image" type="file" accept="image/*" />
+              <button id="clear-disc-image" class="trash-button hidden" type="button" title="디스크 이미지 지우기" aria-label="디스크 이미지 지우기">
+                <svg aria-hidden="true" viewBox="0 0 24 24">
+                  <path d="M9 4h6l1 2h4v2H4V6h4l1-2Z" />
+                  <path d="M7 10h10l-.7 10H7.7L7 10Z" />
+                  <path d="M10 12v6M14 12v6" />
+                </svg>
+              </button>
+            </span>
+            <span class="hint multiline">
+              <strong>전체 라벨 이미지 권장 크기:</strong>
+              <span>재단 크기 320×486~360×547px 또는</span>
+              <span>2mm 여백 포함 360×528~400×587px</span>
+            </span>
+          </label>
+          <label>
+            이미지 맞춤
+            <select id="disc-image-fit">
+              <option value="cover" selected>꽉 채우기</option>
+              <option value="contain">전체 보기</option>
+            </select>
+          </label>
+        </section>
+
+        <section id="case-label-section" class="control-section">
+          <h2>케이스 라벨</h2>
+          <label>
+            형식
+            <select id="case-format">
+              <option value="case">케이스 라벨</option>
+              <option value="j-card">J 카드</option>
+            </select>
+          </label>
+          <label>
+            배치
+            <select id="case-layout">
+              <option value="image">이미지</option>
+              <option value="background-tracks">배경 이미지와 트랙 목록</option>
+              <option value="image-tracks" selected>이미지와 트랙 목록</option>
+              <option value="tracks">트랙 목록</option>
+            </select>
+          </label>
+          <div id="case-image-options" class="option-stack">
+            <label class="checkbox">
+              <input id="case-title-block" type="checkbox" checked />
+              <span>제목 영역 표시</span>
+            </label>
+            <label id="j-card-spine-info-option" class="checkbox hidden">
+              <input id="j-card-spine-info" type="checkbox" checked />
+              <span>J 카드 측면 정보 표시</span>
+            </label>
+          </div>
+          <label>
+            케이스 이미지
+            <span class="file-control">
+              <input id="case-image" type="file" accept="image/*" />
+              <button id="clear-case-image" class="trash-button hidden" type="button" title="케이스 이미지 지우기" aria-label="케이스 이미지 지우기">
+                <svg aria-hidden="true" viewBox="0 0 24 24">
+                  <path d="M9 4h6l1 2h4v2H4V6h4l1-2Z" />
+                  <path d="M7 10h10l-.7 10H7.7L7 10Z" />
+                  <path d="M10 12v6M14 12v6" />
+                </svg>
+              </button>
+            </span>
+            <span class="hint multiline">
+              <strong id="case-image-size-title">전체 케이스 이미지 권장 크기:</strong>
+              <span id="case-image-trim-size">재단 크기 640×541~700×592px 또는</span>
+              <span id="case-image-bleed-size">2mm 여백 포함 680×580~740×632px</span>
+            </span>
+          </label>
+          <label>
+            이미지 맞춤
+            <select id="case-image-fit">
+              <option value="cover" selected>꽉 채우기</option>
+              <option value="contain">전체 보기</option>
+            </select>
+          </label>
+        </section>
+
+        <section id="track-list-section" class="control-section">
+          <h2>트랙 목록</h2>
+          <label id="tracklisting-field">
+            라벨에 표시할 곡
+            <textarea id="tracks" rows="7">01 Night Drive
+02 Glass Station
+03 Blue Hour
+04 Static Bloom
+05 Magnetic Sky
+06 Last Train</textarea>
+          </label>
+          <span class="hint">디스크 또는 케이스에서 트랙 목록 배치를 선택했을 때 사용됩니다.</span>
+        </section>
+
+        <section class="control-section">
+          <h2>측면 라벨</h2>
+          <label class="checkbox">
+            <input id="spine-auto" type="checkbox" checked />
+            <span>앨범명 : 아티스트명 자동 사용</span>
+          </label>
+          <label id="spine-freeform-field">
+            직접 입력
+            <input id="spine-freeform" type="text" value="BLUE HOUR : MIKA VALE" />
+          </label>
+        </section>
+
+        <section class="control-section">
+          <h2>MiniDisc 로고</h2>
+          <label>
+            로고 모양
+            <select id="logo-style">
+              <option value="auto" selected>명암 자동 선택</option>
+              <option value="black">검은색 로고</option>
+              <option value="white">흰색 로고</option>
+              <option value="emoji">이모지 💽</option>
+              <option value="none">로고 없음</option>
+            </select>
+          </label>
+          <label>
+            로고 위치
+            <select id="logo-corner">
+              <option value="bottom-right" selected>오른쪽 아래</option>
+              <option value="bottom-left">왼쪽 아래</option>
+              <option value="top-right">오른쪽 위</option>
+            </select>
+          </label>
+          <div class="logo-options">
+            <label class="checkbox">
+              <input id="logo-disc" type="checkbox" checked />
+              <span>디스크</span>
+            </label>
+            <label class="checkbox case-only-field">
+              <input id="logo-case" type="checkbox" checked />
+              <span>케이스</span>
+            </label>
+          </div>
+        </section>
+      </aside>
+
+      <section class="preview-wrap" aria-label="A4 인쇄 미리보기">
+        <div class="preview-toolbar">
+          <span>인쇄 미리보기</span>
+          <span id="paper-summary">A4 · 210 × 297mm · 100% 실제 크기</span>
+        </div>
+        <div id="sheet-host" class="sheet-host"></div>
+      </section>
+    </main>
+    <div id="app-dialog" class="app-dialog-backdrop hidden" role="presentation">
+      <section class="app-dialog" role="dialog" aria-modal="true" aria-labelledby="app-dialog-title">
+        <button id="app-dialog-close" class="app-dialog-close" type="button" aria-label="닫기">×</button>
+        <div id="app-dialog-icon" class="app-dialog-icon" aria-hidden="true">💾</div>
+        <div class="app-dialog-copy">
+          <h2 id="app-dialog-title">저장 형식 선택</h2>
+          <p id="app-dialog-message">저장할 형식을 선택하세요.</p>
+          <p id="app-dialog-detail" class="app-dialog-detail hidden"></p>
+        </div>
+        <div id="app-dialog-actions" class="app-dialog-actions"></div>
+      </section>
+    </div>
+    <footer class="site-footer">
+      모든 작업은 컴퓨터 안에서 처리되며 외부로 전송되지 않습니다. 원본 CC0 프로젝트와 문제 제보는 <a href="https://github.com/kai-h/minidisc-label-generator" target="_blank" rel="noopener noreferrer">GitHub</a>에서 확인할 수 있습니다. 원작자 후원은 <a href="https://ko-fi.com/kaiserh" target="_blank" rel="noopener noreferrer">Ko-fi</a>를 이용해 주세요.
+    </footer>
+    <script src="./vendor/jspdf.umd.min.js"></script>
+    <script src="./vendor/svg2pdf.umd.min.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,179 @@
+    async applyEditBatch(batch: {
+        order?: number[];
+        metadata?: Array<{
+            originalIndex: number;
+            title?: string;
+            album?: string;
+            artist?: string;
+        }>;
+        discTitle?: {
+            title?: string;
+        } | null;
+        groups?: Group[];
+    }): Promise<Disc> {
+        if (!this.himd) {
+            throw new Error('Hi-MD 디스크가 연결되어 있지 않습니다.');
+        }
+        if (this.atdata !== null || this.himd.isDirty()) {
+            throw new Error('Hi-MD에 아직 저장되지 않은 다른 작업이 있습니다. 먼저 변경 사항을 저장하거나 디스크를 다시 연결해 주세요.');
+        }
+
+        const before = await this.listContent();
+        const originalTracks = before.groups
+            .flatMap((group) => group.tracks)
+            .sort((a, b) => a.index - b.index);
+        const trackCount = originalTracks.length;
+        const order = Array.isArray(batch?.order) ? batch.order.map(Number) : [];
+        if (
+            order.length !== trackCount ||
+            new Set(order).size !== trackCount ||
+            order.some((index) => !Number.isInteger(index) || index < 0 || index >= trackCount)
+        ) {
+            throw new Error('Hi-MD 편집 목록의 트랙 순서가 올바르지 않습니다.');
+        }
+
+        const sanitize = (value: unknown) => String(value ?? '').normalize('NFC').replace(/\0/g, '');
+        const expectedDiscTitle = batch?.discTitle ? sanitize(batch.discTitle.title) : before.title;
+        const discTitleChanged = expectedDiscTitle !== before.title;
+        const metadata = Array.isArray(batch?.metadata) ? batch.metadata : [];
+        const metadataIndexes = new Set<number>();
+        const editedTracks = originalTracks.map((track) => ({ ...track }));
+        for (const edit of metadata) {
+            const originalIndex = Number(edit.originalIndex);
+            if (
+                !Number.isInteger(originalIndex) ||
+                originalIndex < 0 ||
+                originalIndex >= trackCount ||
+                metadataIndexes.has(originalIndex)
+            ) {
+                throw new Error('Hi-MD 제목 편집 대상이 올바르지 않습니다.');
+            }
+            metadataIndexes.add(originalIndex);
+            editedTracks[originalIndex].title = sanitize(edit.title);
+            editedTracks[originalIndex].album = sanitize(edit.album);
+            editedTracks[originalIndex].artist = sanitize(edit.artist);
+        }
+
+        const requestedGroups = Array.isArray(batch?.groups) ? batch.groups : before.groups;
+        const normalizedGroups = requestedGroups.map((group) => ({
+            ...group,
+            title: group.title === null ? null : sanitize(group.title),
+            tracks: [...group.tracks].sort((a, b) => a.index - b.index),
+        }));
+        const groupedIndexes = normalizedGroups.flatMap((group) => group.tracks.map((track) => Number(track.index)));
+        if (
+            groupedIndexes.length !== trackCount ||
+            new Set(groupedIndexes).size !== trackCount ||
+            groupedIndexes.some((index) => !Number.isInteger(index) || index < 0 || index >= trackCount)
+        ) {
+            throw new Error('Hi-MD 그룹 편집 목록에 누락되거나 중복된 트랙이 있습니다.');
+        }
+        for (const group of normalizedGroups.filter((item) => item.title !== null && item.tracks.length > 0)) {
+            const indexes = group.tracks.map((track) => track.index).sort((a, b) => a - b);
+            if (indexes[indexes.length - 1] - indexes[0] !== indexes.length - 1) {
+                throw new Error(`Hi-MD 그룹 "${group.title}"의 트랙이 연속되어 있지 않습니다.`);
+            }
+        }
+
+        const trackSignature = (track: Track) =>
+            JSON.stringify([
+                track.title ?? '',
+                track.album ?? '',
+                track.artist ?? '',
+                track.duration,
+                track.encoding,
+            ]);
+        const expectedTrackSignatures = order.map((originalIndex) => trackSignature(editedTracks[originalIndex]));
+        const groupSignature = (groups: Group[]) =>
+            JSON.stringify(
+                groups
+                    .filter((group) => group.tracks.length > 0)
+                    .map((group) => ({
+                        title: group.title === null ? null : sanitize(group.title),
+                        indices: group.tracks.map((track) => track.index).sort((a, b) => a - b),
+                    }))
+                    .sort((a, b) => a.indices[0] - b.indices[0])
+            );
+        const expectedGroupSignature = groupSignature(normalizedGroups);
+        const groupsChanged = expectedGroupSignature !== groupSignature(before.groups);
+        const currentOrder = Array.from({ length: trackCount }, (_, index) => index);
+        let writeStarted = false;
+        let flushStarted = false;
+
+        try {
+            if (discTitleChanged) {
+                renameDisc(this.himd, expectedDiscTitle);
+                writeStarted = true;
+            }
+            for (const edit of metadata) {
+                const originalIndex = Number(edit.originalIndex);
+                renameTrack(this.himd, originalIndex, {
+                    title: sanitize(edit.title),
+                    album: sanitize(edit.album),
+                    artist: sanitize(edit.artist),
+                });
+                writeStarted = true;
+            }
+            for (let destination = 0; destination < order.length; destination++) {
+                const source = currentOrder.indexOf(order[destination]);
+                if (source === destination) continue;
+                moveTrack(this.himd, source, destination);
+                const [moved] = currentOrder.splice(source, 1);
+                currentOrder.splice(destination, 0, moved);
+                writeStarted = true;
+            }
+            if (groupsChanged) {
+                rewriteGroups(
+                    this.himd,
+                    normalizedGroups
+                        .filter((group) => group.title !== null && group.tracks.length > 0)
+                        .map((group) => ({
+                            title: group.title,
+                            indices: group.tracks.map((track) => track.index),
+                        }))
+                );
+                writeStarted = true;
+            }
+            if (!writeStarted) {
+                return before;
+            }
+
+            flushStarted = true;
+            await this.himd.flush();
+            this.dropCachedContentList();
+            // The UMSC filesystem is already initialized and open. Calling
+            // listContent(true) here reinitializes the same USB mass-storage
+            // session and can leave libusb transferIn waiting indefinitely.
+            // Flush has completed, so validate against the current HiMD model
+            // without reopening the USB filesystem.
+            const result = await this.listContent();
+            const actualTracks = result.groups
+                .flatMap((group) => group.tracks)
+                .sort((a, b) => a.index - b.index);
+            if (actualTracks.length !== trackCount) {
+                throw new Error(`적용 후 트랙 수가 ${trackCount}개에서 ${actualTracks.length}개로 달라졌습니다.`);
+            }
+            if (actualTracks.map(trackSignature).some((signature, index) => signature !== expectedTrackSignatures[index])) {
+                throw new Error('적용 후 Hi-MD 트랙 제목 또는 순서가 요청한 결과와 다릅니다.');
+            }
+            if (result.title !== expectedDiscTitle) {
+                throw new Error('적용 후 Hi-MD 디스크 이름이 요청한 결과와 다릅니다.');
+            }
+            if (groupSignature(result.groups) !== expectedGroupSignature) {
+                throw new Error('적용 후 Hi-MD 그룹 구성이 요청한 결과와 다릅니다.');
+            }
+            return result;
+        } catch (error) {
+            this.dropCachedContentList();
+            if (!flushStarted) {
+                try {
+                    await this.initHiMD();
+                } catch {
+                    // The original error below is more useful to the user.
+                }
+            }
+            throw new Error(
+                `${flushStarted ? 'Hi-MD 편집 내용을 기록한 뒤 검증 중 오류가 발생했습니다. 디스크를 다시 검색해 실제 제목과 순서를 확인해 주세요.\n' : ''}${error instanceof Error ? error.message : String(error)}`
+            );
+        }
+    }

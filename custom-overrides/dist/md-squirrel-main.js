@@ -1,6 +1,6 @@
 "use strict";
 
-const { dialog, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, screen, shell } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const fsp = fs.promises;
@@ -13,6 +13,44 @@ const AUDIO_EXTENSIONS = new Set([
 ]);
 const MUSICBRAINZ_USER_AGENT = "MD-Squirrel/0.1.0 (https://github.com/run240/web-minidisc-pro-windows-custom)";
 let lastMusicBrainzRequestAt = 0;
+let mdLabelMakerWindow = null;
+let preserveLabelDraftOnClose = false;
+
+function labelRelaunchStatePath() {
+    return path.join(app.getPath("userData"), "minidisc-label-maker-relaunch.json");
+}
+
+function preserveLabelDraftForRelaunch() {
+    preserveLabelDraftOnClose = true;
+    const shouldReopen = Boolean(mdLabelMakerWindow && !mdLabelMakerWindow.isDestroyed());
+    try {
+        if (shouldReopen) {
+            fs.writeFileSync(labelRelaunchStatePath(), JSON.stringify({ reopen: true }), "utf8");
+        }
+        else {
+            fs.rmSync(labelRelaunchStatePath(), { force: true });
+        }
+    }
+    catch (error) {
+        console.warn("MiniDisc label relaunch state save failed:", error);
+    }
+}
+
+function placeLabelMakerNearMain(mainWindow, labelWindow) {
+    if (!mainWindow || mainWindow.isDestroyed() || !labelWindow || labelWindow.isDestroyed())
+        return;
+    const mainBounds = mainWindow.getBounds();
+    const display = screen.getDisplayMatching(mainBounds);
+    const workArea = display.workArea;
+    const labelBounds = labelWindow.getBounds();
+    const width = Math.min(labelBounds.width, workArea.width);
+    const height = Math.min(labelBounds.height, workArea.height);
+    const centeredX = mainBounds.x + Math.round((mainBounds.width - width) / 2);
+    const centeredY = mainBounds.y + Math.round((mainBounds.height - height) / 2);
+    const x = Math.max(workArea.x, Math.min(centeredX, workArea.x + workArea.width - width));
+    const y = Math.max(workArea.y, Math.min(centeredY, workArea.y + workArea.height - height));
+    labelWindow.setBounds({ x, y, width, height });
+}
 
 function wait(milliseconds) {
     return new Promise(resolve => setTimeout(resolve, milliseconds));
@@ -497,6 +535,115 @@ async function createEnglishCopies(window, { sourceFolder, tracks }) {
 }
 
 function setupMDSquirrelIPC(window) {
+    const labelDraftPath = path.join(app.getPath("userData"), "minidisc-label-maker-draft.json");
+    let reopenLabelMaker = false;
+    try {
+        reopenLabelMaker = JSON.parse(fs.readFileSync(labelRelaunchStatePath(), "utf8"))?.reopen === true;
+    }
+    catch (error) {
+        if (error?.code !== "ENOENT")
+            console.warn("MiniDisc label relaunch state load failed:", error);
+    }
+    finally {
+        try {
+            fs.rmSync(labelRelaunchStatePath(), { force: true });
+        }
+        catch (error) {
+            console.warn("MiniDisc label relaunch state cleanup failed:", error);
+        }
+    }
+    ipcMain.removeHandler("mdLabelMakerLoadDraft");
+    ipcMain.handle("mdLabelMakerLoadDraft", async () => {
+        try {
+            return JSON.parse(await fsp.readFile(labelDraftPath, "utf8"));
+        }
+        catch (error) {
+            if (error?.code !== "ENOENT")
+                console.warn("MiniDisc label draft load failed:", error);
+            return null;
+        }
+    });
+    ipcMain.removeHandler("mdLabelMakerSaveDraft");
+    ipcMain.handle("mdLabelMakerSaveDraft", async (_, project) => {
+        if (!project || !Array.isArray(project.labels) || !project.labels.length)
+            return { ok: false };
+        const temporaryPath = `${labelDraftPath}.tmp`;
+        try {
+            await fsp.mkdir(path.dirname(labelDraftPath), { recursive: true });
+            await fsp.writeFile(temporaryPath, JSON.stringify(project), "utf8");
+            await fsp.rm(labelDraftPath, { force: true });
+            await fsp.rename(temporaryPath, labelDraftPath);
+            return { ok: true };
+        }
+        catch (error) {
+            await fsp.rm(temporaryPath, { force: true }).catch(() => { });
+            console.warn("MiniDisc label draft save failed:", error);
+            return { ok: false, message: error?.message || String(error) };
+        }
+    });
+    ipcMain.removeHandler("mdLabelMakerOpen");
+    const openLabelMaker = async () => {
+        if (mdLabelMakerWindow && !mdLabelMakerWindow.isDestroyed()) {
+            placeLabelMakerNearMain(window, mdLabelMakerWindow);
+            mdLabelMakerWindow.show();
+            mdLabelMakerWindow.focus();
+            return true;
+        }
+        mdLabelMakerWindow = new BrowserWindow({
+            width: 1320,
+            height: 860,
+            minWidth: 980,
+            minHeight: 680,
+            modal: false,
+            show: false,
+            autoHideMenuBar: true,
+            backgroundColor: "#111014",
+            title: "MiniDisc 라벨 만들기",
+            icon: path.join(__dirname, "..", "renderer", "assets", "md-label-maker.png"),
+            webPreferences: {
+                preload: path.join(__dirname, "md-label-maker-preload.js"),
+                contextIsolation: true,
+                nodeIntegration: false,
+                sandbox: true,
+            },
+        });
+        placeLabelMakerNearMain(window, mdLabelMakerWindow);
+        let discardingLabelDraft = false;
+        mdLabelMakerWindow.on("close", event => {
+            if (preserveLabelDraftOnClose)
+                return;
+            if (discardingLabelDraft) {
+                event.preventDefault();
+                return;
+            }
+            event.preventDefault();
+            discardingLabelDraft = true;
+            mdLabelMakerWindow?.webContents.send("mdLabelMakerDiscardDraft");
+            setTimeout(() => {
+                void fsp.rm(labelDraftPath, { force: true }).finally(() => {
+                    if (mdLabelMakerWindow && !mdLabelMakerWindow.isDestroyed())
+                        mdLabelMakerWindow.destroy();
+                });
+            }, 60);
+        });
+        mdLabelMakerWindow.once("ready-to-show", () => mdLabelMakerWindow?.show());
+        mdLabelMakerWindow.once("closed", () => {
+            mdLabelMakerWindow = null;
+        });
+        mdLabelMakerWindow.webContents.setWindowOpenHandler(({ url }) => {
+            if (/^https?:\/\//i.test(url))
+                void shell.openExternal(url);
+            return { action: "deny" };
+        });
+        await mdLabelMakerWindow.loadFile(path.join(__dirname, "..", "renderer", "md-label-maker", "index.html"));
+        return true;
+    };
+    ipcMain.handle("mdLabelMakerOpen", openLabelMaker);
+    if (reopenLabelMaker) {
+        setImmediate(() => {
+            void openLabelMaker().catch(error => console.warn("MiniDisc label window restore failed:", error));
+        });
+    }
     ipcMain.handle("mdSquirrelSelectFolder", async () => {
         const result = await dialog.showOpenDialog(window, {
             title: "MD Squirrel - 음원 폴더 선택",
@@ -520,4 +667,4 @@ function setupMDSquirrelIPC(window) {
     ipcMain.handle("mdSquirrelOpenPath", (_, targetPath) => shell.openPath(targetPath));
 }
 
-module.exports = { setupMDSquirrelIPC };
+module.exports = { preserveLabelDraftForRelaunch, setupMDSquirrelIPC };

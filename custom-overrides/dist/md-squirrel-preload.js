@@ -87,6 +87,69 @@ function installStyles() {
       #md-squirrel-launcher:focus-visible .mds-launcher-tooltip {
         opacity: 1;
       }
+      #md-label-launcher {
+        position: fixed; z-index: 2147482000; width: 82px; height: 82px; padding: 0;
+        display: block; border: 0; border-radius: 50%; overflow: visible; color: #f4d9e7;
+        background: transparent; cursor: pointer; transition: transform .16s ease;
+      }
+      #md-label-launcher:hover { transform: translateY(-2px); }
+      #md-label-launcher:disabled { cursor: wait; opacity: .7; }
+      #md-label-launcher .mdl-launcher-label {
+        position: absolute; left: 91px; top: 50%; transform: translateY(-50%);
+        display: block; color: #aaa3ad; font-size: 11px; font-weight: 400;
+        line-height: 1; white-space: nowrap; text-shadow: 0 1px 4px rgba(0,0,0,.65);
+      }
+      #md-label-launcher .mdl-icon-frame {
+        position: absolute; inset: 0; display: grid; place-items: center;
+        width: 82px; height: 82px; overflow: hidden; box-sizing: border-box;
+        color: #f1b7d1; background: radial-gradient(circle at 35% 28%, #373039, #17151a 70%);
+        border: 1px solid rgba(219,92,151,.62); border-radius: 50%;
+        box-shadow: 0 12px 32px rgba(0,0,0,.48), 0 0 0 5px rgba(219,92,151,.07);
+        transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
+      }
+      #md-label-launcher:hover .mdl-icon-frame {
+        transform: scale(1.04); border-color: #ee79af;
+        box-shadow: 0 15px 38px rgba(0,0,0,.55), 0 0 0 6px rgba(219,92,151,.12);
+      }
+      #md-label-launcher .mdl-icon-frame svg { width: 48px; height: 48px; }
+      #md-label-launcher .mdl-icon-frame img {
+        position: absolute; inset: 0; width: 100%; height: 100%;
+        display: block; border-radius: 50%; object-fit: cover;
+      }
+      #md-label-launcher .mdl-launcher-tooltip {
+        position: absolute; left: 98px; top: 7px; width: 270px; max-width: calc(100vw - 126px); padding: 10px 13px;
+        box-sizing: border-box;
+        color: #eee8ee; background: rgba(35,31,37,.98); border: 1px solid #634156;
+        border-radius: 10px; box-shadow: 0 12px 32px rgba(0,0,0,.48);
+        font-size: 12px; font-weight: 400; line-height: 1.55; text-align: left;
+        white-space: nowrap; pointer-events: none; opacity: 0;
+      }
+      #md-label-launcher .mdl-launcher-tooltip::after {
+        content: ""; position: absolute; left: -7px; top: 28px; width: 12px; height: 12px;
+        background: #231f25; border-left: 1px solid #634156; border-bottom: 1px solid #634156;
+        transform: rotate(45deg);
+      }
+      #md-label-launcher:hover .mdl-launcher-tooltip,
+      #md-label-launcher:focus-visible .mdl-launcher-tooltip { opacity: 1; }
+      #md-label-connected-launcher {
+        flex: 0 0 auto; display: inline-flex; align-items: center; gap: 7px;
+        height: 32px; padding: 3px 11px 3px 7px; box-sizing: border-box;
+        color: #f1c0d7; background: rgba(219,92,151,.08);
+        border: 1px solid rgba(219,92,151,.52); border-radius: 16px;
+        font: inherit; font-size: 12px; font-weight: 700; line-height: 1;
+        white-space: nowrap; cursor: pointer;
+        transition: color .15s ease, background .15s ease, border-color .15s ease;
+      }
+      #md-label-connected-launcher:hover {
+        color: #fff; background: rgba(219,92,151,.18); border-color: #e778aa;
+      }
+      #md-label-connected-launcher:disabled { cursor: wait; opacity: .62; }
+      #md-label-connected-launcher img {
+        width: 22px; height: 22px; display: block; border-radius: 50%; object-fit: cover;
+      }
+      @media (max-width: 760px) {
+        #md-label-launcher, #md-squirrel-launcher { display: none !important; }
+      }
       #md-squirrel-overlay {
         position: fixed; inset: 0; z-index: 2147483000; display: grid; place-items: center;
         padding: 24px; background: rgba(4,4,7,.72); backdrop-filter: blur(7px);
@@ -278,6 +341,31 @@ function positionLauncher(launcher, panel) {
         : `${Math.max(rect.top + 34, 72)}px`;
 }
 
+function positionLabelLauncher(launcher, panel) {
+    const rect = panel.getBoundingClientRect();
+    const heading = [...document.querySelectorAll("h1, h2, h3, p, div, span")]
+        .find(element => (element.textContent || "").trim() === "사용할 디스크 모드를 선택하세요");
+    const netMDCard = [...document.querySelectorAll("a, button, [role='button']")]
+        .filter(element => {
+        const text = (element.textContent || "").replace(/\s+/g, " ").trim();
+        const bounds = element.getBoundingClientRect();
+        return text.includes("NetMD로 연결") && bounds.width > 220 && bounds.height > 180;
+    })
+        .sort((a, b) => {
+        const aRect = a.getBoundingClientRect();
+        const bRect = b.getBoundingClientRect();
+        return (aRect.width * aRect.height) - (bRect.width * bRect.height);
+    })[0];
+    const cardRect = netMDCard?.getBoundingClientRect();
+    const headingRect = heading?.getBoundingClientRect();
+    launcher.style.left = cardRect
+        ? `${cardRect.left}px`
+        : `${Math.max(rect.left + 24, rect.left + 120)}px`;
+    launcher.style.top = headingRect
+        ? `${headingRect.top + (headingRect.height - (launcher.offsetHeight || 82)) / 2}px`
+        : `${Math.max(rect.top + 34, 72)}px`;
+}
+
 function createLauncher() {
     console.info("[MD Squirrel] Home launcher created");
     const launcher = createElement("button");
@@ -307,6 +395,70 @@ function createLauncher() {
     return launcher;
 }
 
+function createLabelLauncher() {
+    console.info("[MD Label Maker] Home launcher created");
+    const launcher = createElement("button");
+    launcher.id = "md-label-launcher";
+    launcher.type = "button";
+    launcher.setAttribute("aria-label", "MiniDisc 라벨 만들기 열기");
+    const label = createElement("span", "mdl-launcher-label", "MD 라벨");
+    const tooltip = createElement("span", "mdl-launcher-tooltip");
+    tooltip.append(
+        createElement("span", "", "MiniDisc 라벨과 케이스를 디자인하고"),
+        document.createElement("br"),
+        createElement("span", "", "PDF·PNG·SVG 또는 작업 파일로 저장합니다."),
+    );
+    const iconFrame = createElement("span", "mdl-icon-frame");
+    const image = document.createElement("img");
+    image.src = "sandbox://assets/md-label-maker.png";
+    image.alt = "";
+    const fallback = document.createElement("span");
+    fallback.innerHTML = `<svg aria-hidden="true" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M18 10h28l8 8v36H10V18z" fill="rgba(219,92,151,.10)"/><path d="M46 10v10h8"/><rect x="18" y="25" width="28" height="20" rx="2"/><circle cx="32" cy="35" r="6"/><path d="M22 50h20"/></svg>`;
+    image.addEventListener("error", () => image.remove());
+    iconFrame.append(fallback, image);
+    launcher.append(label, iconFrame, tooltip);
+    launcher.addEventListener("click", () => void openLabelMakerFrom(launcher));
+    document.body.append(launcher);
+    return launcher;
+}
+
+async function openLabelMakerFrom(button) {
+    button.disabled = true;
+    try {
+        await ipcRenderer.invoke("mdLabelMakerOpen");
+    }
+    catch (error) {
+        showToast(`라벨 제작기를 열지 못했습니다: ${error?.message || error}`);
+    }
+    finally {
+        button.disabled = false;
+    }
+}
+
+function refreshConnectedLabelLauncher(isWelcomeScreen) {
+    let launcher = document.getElementById("md-label-connected-launcher");
+    const editButton = document.querySelector('button[aria-label="편집 적용"]');
+    const toolbarHost = editButton?.parentElement || [...document.querySelectorAll('[class*="toolbarLabel"]')]
+        .find(element => element.querySelector("h3"));
+    if (isWelcomeScreen || !toolbarHost) {
+        launcher?.remove();
+        return;
+    }
+    if (!launcher) {
+        launcher = createElement("button");
+        launcher.id = "md-label-connected-launcher";
+        launcher.type = "button";
+        launcher.setAttribute("aria-label", "MiniDisc 라벨 만들기");
+        const image = document.createElement("img");
+        image.src = "sandbox://assets/md-label-maker.png";
+        image.alt = "";
+        launcher.append(image, createElement("span", "", "라벨 만들기"));
+        launcher.addEventListener("click", () => void openLabelMakerFrom(launcher));
+    }
+    if (launcher.parentElement !== toolbarHost)
+        toolbarHost.append(launcher);
+}
+
 function refreshLauncher() {
     if (!document.body)
         return;
@@ -317,21 +469,31 @@ function refreshLauncher() {
         (pageText.includes("NetMD로 연결") && pageText.includes("Hi-MD로 연결"));
     const panel = findWelcomePanel();
     let launcher = document.getElementById("md-squirrel-launcher");
+    let labelLauncher = document.getElementById("md-label-launcher");
+    refreshConnectedLabelLauncher(isWelcomeScreen);
     if (!isWelcomeScreen || document.getElementById("md-squirrel-overlay")) {
         if (launcher)
             launcher.style.display = "none";
+        if (labelLauncher)
+            labelLauncher.style.display = "none";
         return;
     }
     if (!launcher)
         launcher = createLauncher();
+    if (!labelLauncher)
+        labelLauncher = createLabelLauncher();
     launcher.style.display = "block";
+    labelLauncher.style.display = "block";
     if (panel) {
         positionLauncher(launcher, panel);
+        positionLabelLauncher(labelLauncher, panel);
     }
     else {
         launcher.style.left = "auto";
         launcher.style.right = "clamp(96px, 16vw, 220px)";
         launcher.style.top = "96px";
+        labelLauncher.style.left = "clamp(96px, 16vw, 220px)";
+        labelLauncher.style.top = "96px";
     }
 }
 

@@ -44,11 +44,18 @@ async function ewmdOpenDialog(window, filters, directory) {
 }
 let relaunching = false;
 let recentUsbTransferFailure = null;
+let recentHiMDMediaMismatchAt = 0;
 function reload(window) {
     if (relaunching)
         return;
     appendDiagnosticLog('APP relaunch requested', new Error('Relaunch call stack'));
     relaunching = true;
+    try {
+        require("./md-squirrel-main").preserveLabelDraftForRelaunch?.();
+    }
+    catch (error) {
+        console.warn('Could not mark MiniDisc label draft for relaunch preservation:', error);
+    }
     // AppImages do not restart correctly
     if (electron_1.app.isPackaged && process.env.APPIMAGE) {
         electron_1.dialog.showMessageBoxSync(window, { message: "This is an AppImage. Electron has a bug where AppImages cannot restart. Please restart the app manually" });
@@ -336,7 +343,7 @@ function traverseObject(window, objectFactory, namespace, recovery = {}) {
                 });
             }
             targetObject.__activeIpcMethods.add(n);
-            if (n === 'finalizeUpload') {
+            if (['finalizeUpload', 'applyEditBatch', 'wipeDisc'].includes(n)) {
                 appendDiagnosticLog(`IPC ${namespace}${n} started`, {
                     deviceName: targetObject.netmdInterface?.netMd?.getDeviceName?.(),
                     at: Date.now(),
@@ -354,26 +361,35 @@ function traverseObject(window, objectFactory, namespace, recovery = {}) {
                 }
                 const operation = Promise.resolve().then(() => targetObject[n](...allArgs));
                 const shouldTimeOutHiMD = namespace === '_himd_' &&
-                    ['pair', 'getDeviceName', 'listContent', 'applyEditBatch'].includes(n);
+                    ['pair', 'getDeviceName', 'listContent', 'applyEditBatch', 'wipeDisc'].includes(n);
                 const shouldTimeOutNetMD = namespace === '_netmd_' &&
-                    (['pair', 'connect'].includes(n) || isForcedTOCReload);
+                    (['pair', 'connect', 'applyEditBatch'].includes(n) || isForcedTOCReload);
                 let result;
                 if (shouldTimeOutHiMD) {
-                    const hiMDTimeout = n === 'applyEditBatch' ? 60000 : n === 'listContent' ? 15000 : 12000;
-                    result = await withTimeout(operation, hiMDTimeout, n === 'applyEditBatch'
-                        ? 'Hi-MD 편집 적용과 검증 시간이 초과되었습니다. 장치를 분리하지 말고 잠시 기다린 뒤, 앱이 복구되지 않으면 USB를 다시 연결해 주세요.'
-                        : 'Hi-MD 파일시스템을 찾지 못했습니다. 일반 NetMD 포맷 미디어라면 USB 인터페이스가 Hi-MD 모드에 남아 있는 상태일 수 있습니다.', 'HIMD_TIMEOUT');
+                    const hiMDWipe = n === 'wipeDisc';
+                    const hiMDTimeout = n === 'applyEditBatch' || hiMDWipe ? 60000 : n === 'listContent' ? 15000 : 12000;
+                    result = await withTimeout(operation, hiMDTimeout, hiMDWipe
+                        ? 'Hi-MD 디스크 삭제는 기기에 반영됐지만 완료 응답을 받지 못했습니다.'
+                        : n === 'applyEditBatch'
+                            ? 'Hi-MD 편집 적용과 검증 시간이 초과되었습니다. 장치를 분리하지 말고 잠시 기다린 뒤, 앱이 복구되지 않으면 USB를 다시 연결해 주세요.'
+                            : 'Hi-MD 파일시스템을 찾지 못했습니다. 일반 NetMD 포맷 미디어라면 USB 인터페이스가 Hi-MD 모드에 남아 있는 상태일 수 있습니다.', hiMDWipe ? 'HIMD_WIPE_TIMEOUT' : 'HIMD_TIMEOUT');
                 }
                 else if (shouldTimeOutNetMD) {
-                    result = await withTimeout(operation, isForcedTOCReload ? 20000 : 15000, isForcedTOCReload
-                        ? '디스크 다시 검색 시간이 초과되었습니다. USB 케이블을 다시 연결한 뒤 재시도해 주세요.'
-                        : 'NetMD 기기 연결 응답 시간이 초과되었습니다. USB 케이블을 다시 연결한 뒤 재시도해 주세요.', isForcedTOCReload ? 'NETMD_RESCAN_TIMEOUT' : 'NETMD_TIMEOUT');
+                    const netMDApplyEdit = n === 'applyEditBatch';
+                    result = await withTimeout(operation, netMDApplyEdit ? 60000 : isForcedTOCReload ? 20000 : 15000, netMDApplyEdit
+                        ? 'NetMD 편집 저장 시간이 초과되었습니다. USB 케이블을 다시 연결한 뒤 실제 제목을 확인해 주세요.'
+                        : isForcedTOCReload
+                            ? '디스크 다시 검색 시간이 초과되었습니다. USB 케이블을 다시 연결한 뒤 재시도해 주세요.'
+                            : 'NetMD 기기 연결 응답 시간이 초과되었습니다. USB 케이블을 다시 연결한 뒤 재시도해 주세요.', netMDApplyEdit ? 'NETMD_EDIT_TIMEOUT' : isForcedTOCReload ? 'NETMD_RESCAN_TIMEOUT' : 'NETMD_TIMEOUT');
                 }
                 else {
                     result = await operation;
                 }
-                if (n === 'finalizeUpload') {
+                if (['finalizeUpload', 'applyEditBatch', 'wipeDisc'].includes(n)) {
                     appendDiagnosticLog(`IPC ${namespace}${n} completed`, { at: Date.now() });
+                }
+                if (namespace === '_himd_' && ['getDeviceName', 'listContent'].includes(n)) {
+                    recentHiMDMediaMismatchAt = 0;
                 }
                 return [result, null];
             }
@@ -409,14 +425,58 @@ function traverseObject(window, objectFactory, namespace, recovery = {}) {
                     reload(window);
                     return [null, null];
                 }
+                if (err?.code === 'HIMD_WIPE_TIMEOUT' && !hiMDRecoveryPending) {
+                    hiMDRecoveryPending = true;
+                    try {
+                        await withTimeout(targetObject.finalize(), 5000, 'Hi-MD 삭제 연결 정리 시간 초과');
+                    }
+                    catch (cleanupError) {
+                        console.log('Timed-out Hi-MD wipe cleanup failed:', cleanupError);
+                    }
+                    await showRendererWarning(window, {
+                        title: 'Hi-MD 디스크 삭제 완료 확인',
+                        message: '삭제 명령은 기기에 전달됐지만 완료 응답을 받지 못했습니다.',
+                        detail: '디스크 삭제는 이미 반영됐을 수 있습니다. 확인을 누른 뒤 기기를 다시 연결하여 디스크 내용을 확인해 주세요. 확인하기 전에는 삭제를 다시 실행하지 마세요.',
+                    });
+                    if (!window.isDestroyed())
+                        window.webContents.reload();
+                    hiMDRecoveryPending = false;
+                    return [null, null];
+                }
                 if (err?.code === 'HIMD_TIMEOUT' && !hiMDRecoveryPending) {
                     hiMDRecoveryPending = true;
+                    const shouldRetryMediaRefresh = ['getDeviceName', 'listContent'].includes(n) &&
+                        recentHiMDMediaMismatchAt > 0 &&
+                        Date.now() - recentHiMDMediaMismatchAt < 10 * 60 * 1000;
                     try {
                         await withTimeout(targetObject.finalize(), 4000, 'Hi-MD 연결 정리 시간 초과');
                     }
                     catch (cleanupError) {
                         console.log('Timed-out Hi-MD connection cleanup failed:', cleanupError);
                     }
+                    if (shouldRetryMediaRefresh) {
+                        appendDiagnosticLog('Hi-MD media refresh retry started', { method: n, at: Date.now() });
+                        try {
+                            await wait(1000);
+                            await withTimeout(targetObject.pair(), 10000, 'Hi-MD 미디어 재인식 준비 시간이 초과되었습니다.');
+                            const retryTimeout = n === 'listContent' ? 15000 : 12000;
+                            const retryResult = await withTimeout(Promise.resolve().then(() => targetObject[n](...allArgs)), retryTimeout, '교체한 Hi-MD 미디어를 다시 인식하지 못했습니다.', 'HIMD_MEDIA_RETRY_TIMEOUT');
+                            recentHiMDMediaMismatchAt = 0;
+                            hiMDRecoveryPending = false;
+                            appendDiagnosticLog('Hi-MD media refresh retry completed', { method: n, at: Date.now() });
+                            return [retryResult, null];
+                        }
+                        catch (retryError) {
+                            appendDiagnosticLog('Hi-MD media refresh retry failed', retryError);
+                            try {
+                                await withTimeout(targetObject.finalize(), 4000, 'Hi-MD 재시도 연결 정리 시간 초과');
+                            }
+                            catch (retryCleanupError) {
+                                console.log('Retried Hi-MD connection cleanup failed:', retryCleanupError);
+                            }
+                        }
+                    }
+                    recentHiMDMediaMismatchAt = Date.now();
                     await showRendererWarning(window, {
                         title: 'Hi-MD 연결 시간이 초과되었습니다',
                         message: '현재 미디어에서 Hi-MD 파일시스템을 찾지 못했습니다.',
@@ -1395,6 +1455,60 @@ async function integrate(window) {
     let transferClosePromptResetTimer;
     let safeDisconnectClosePending = false;
     let safeDisconnectCloseAllowed = false;
+    electron_1.ipcMain.removeHandler('mdLabelMakerReadDisc');
+    electron_1.ipcMain.handle('mdLabelMakerReadDisc', async () => {
+        if (rendererReportedTransferActive || hasActiveTransfer(service) || hasActiveTransfer(himdService)) {
+            return { ok: false, code: 'busy', message: '녹음이나 전송이 진행 중입니다. 작업이 끝난 뒤 다시 시도해 주세요.' };
+        }
+        const discReadActive = service.__activeIpcMethods?.has('listContent') || himdService.__activeIpcMethods?.has('listContent');
+        if (discReadActive) {
+            return { ok: false, code: 'busy', message: '메인 화면에서 MiniDisc 정보를 불러오는 중입니다. 목록이 표시된 뒤 다시 눌러 주세요.' };
+        }
+        const mode = himdService.fsDriver && himdService.himd
+            ? 'himd'
+            : service.netmdInterface
+                ? 'netmd'
+                : null;
+        if (!mode) {
+            return { ok: false, code: 'not-connected', message: '메인 화면에서 먼저 NetMD 또는 Hi-MD로 연결하고, 곡 목록이 표시된 뒤 다시 눌러 주세요.' };
+        }
+        try {
+            // Only copy the content of the connection already established by
+            // the main screen. The label tool must never initiate a USB rescan
+            // or mode switch of its own.
+            const disc = await withTimeout(mode === 'himd' ? himdService.listContent() : service.listContent(false), 6000, '연결된 MiniDisc 목록을 가져오는 시간이 초과되었습니다.', 'LABEL_DISC_READ_TIMEOUT');
+            const tracks = (disc?.groups ?? [])
+                .flatMap(group => (group.tracks ?? []).map(track => ({
+                index: Number(track.index) || 0,
+                title: String(track.title || track.fullWidthTitle || '').trim(),
+                artist: String(track.artist || '').trim(),
+                album: String(track.album || '').trim(),
+                groupTitle: group.title === null ? '' : String(group.title || group.fullWidthTitle || '').trim(),
+                duration: Number(track.duration) || 0,
+            })))
+                .sort((a, b) => a.index - b.index);
+            if (!tracks.length) {
+                return { ok: false, code: 'empty-disc', message: '디스크는 인식했지만 가져올 곡이 없습니다.' };
+            }
+            return {
+                ok: true,
+                mode,
+                discTitle: String(disc.title || disc.fullWidthTitle || '').trim(),
+                tracks,
+            };
+        }
+        catch (error) {
+            const message = String(error?.message || error || '알 수 없는 오류');
+            const noMedia = /no disc|no media|disc.*not|media.*not|rejected/i.test(message);
+            return {
+                ok: false,
+                code: noMedia ? 'no-media' : 'read-failed',
+                message: noMedia
+                    ? '기기는 연결되어 있지만 MiniDisc 미디어를 찾지 못했습니다.'
+                    : `MiniDisc 곡 목록을 읽지 못했습니다. (${message})`,
+            };
+        }
+    });
     const confirmForceQuitStalledTransfer = async () => {
         if (closeConfirmationPending)
             return false;
