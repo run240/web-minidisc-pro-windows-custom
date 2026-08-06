@@ -1,5 +1,9 @@
 # Code signing policy
 
+No signing certificate is currently issued to this project, and current release
+binaries are unsigned. If the project is approved for SignPath Foundation
+signing, the required attribution will be:
+
 Free code signing provided by
 [SignPath.io](https://signpath.io/), certificate by
 [SignPath Foundation](https://signpath.org/).
@@ -10,15 +14,15 @@ Free code signing provided by
 - Signing-request approver: [run240](https://github.com/run240)
 
 Changes from outside contributors must be reviewed before they are merged.
-Production signing requests require manual approval by the signing-request
-approver.
+Future production signing requests will require manual approval by the
+signing-request approver.
 
 ## Build and release origin
 
-Release candidates are built from this public repository by GitHub-hosted
-GitHub Actions runners. The SignPath GitHub connector verifies the workflow
-origin before a signing request is accepted. Release binaries are not built or
-uploaded from a maintainer workstation.
+Current unsigned releases may be built locally from this public repository. If
+certificate-backed signing is enabled in the future, signing requests will be
+built by GitHub-hosted GitHub Actions runners, and the SignPath GitHub connector
+will verify the workflow origin before a signing request is accepted.
 
 Only project-owned binaries are submitted for signing. Unsigned upstream
 open-source libraries may be included in the application without being signed

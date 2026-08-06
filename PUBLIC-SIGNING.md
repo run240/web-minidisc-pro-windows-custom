@@ -1,4 +1,4 @@
-# Public build and SignPath signing
+# Public build and optional SignPath signing
 
 This repository combines the following open-source components:
 
@@ -8,9 +8,10 @@ This repository combines the following open-source components:
 - the Windows custom-build overrides in `custom-overrides`
 
 The custom overrides are snapshots of the exact generated files used by the
-existing V3 release. They are applied after building the two upstream projects,
-so the distributed application can be reproduced from this repository. Future
-changes should be made in the original TypeScript/React sources where practical.
+existing Windows Custom R7 release. They are applied after building the two
+upstream projects, so the distributed application can be reproduced from this
+repository. Future changes should be made in the original TypeScript/React
+sources where practical.
 
 ## Local unsigned build
 
@@ -33,6 +34,10 @@ The unpacked application is written to `build\win-unpacked`.
 
 ## SignPath Foundation
 
+The following integration is prepared for possible future use. It remains
+inactive until the project is approved and receives the required SignPath
+organization, project, policy, and API credentials.
+
 1. Publish this repository publicly with its GPL-2.0 license and submodule.
 2. Apply for a free open-source subscription at https://signpath.org/apply.html.
 3. Install the SignPath GitHub App for the public repository.
@@ -46,14 +51,14 @@ The unpacked application is written to `build\win-unpacked`.
 6. Create the repository secret `SIGNPATH_API_TOKEN`.
 7. Run the `Build Windows and submit to SignPath` workflow.
 
-The workflow always publishes an unsigned build artifact. Once the SignPath
+The workflow always publishes an unsigned build artifact. If the SignPath
 variables and secret are configured, it also submits the build for signing,
 verifies the returned signatures, and publishes a signed artifact.
 
 ## Signature scope
 
-The SignPath configuration signs the main executable, the WinUSB driver helper,
-and top-level Electron DLLs. Native Node modules are third-party PE binaries
+The prepared SignPath configuration signs the main executable and the WinUSB
+driver helper. Native Node modules are third-party PE binaries
 with a `.node` extension; confirm their handling with SignPath during project
 onboarding. Microsoft recommends signing every executable binary loaded by an
 app, so Smart App Control testing must exercise both NetMD and Hi-MD flows.

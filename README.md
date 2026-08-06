@@ -13,12 +13,9 @@ NetMD/Hi-MD device support and an integrated WinUSB installation flow.
 The source and GitHub Actions build pipeline are public. Web MiniDisc Pro 1.5.4 — Windows Custom R7 is
 available from [GitHub Releases](https://github.com/run240/web-minidisc-pro-windows-custom/releases)
 as a portable x64 ZIP. The current portable build is unsigned; open-source
-code-signing setup and Windows 11 Smart App Control verification are still in
-progress.
-
-Free code signing provided by
-[SignPath.io](https://signpath.io/), certificate by
-[SignPath Foundation](https://signpath.org/).
+code-signing is not currently active. A SignPath-compatible workflow is
+included for possible future use, but no signing certificate has been issued
+to this project.
 
 ## Main changes
 
@@ -53,13 +50,23 @@ Free code signing provided by
 
 ![MiniDisc label maker](docs/images/v7-label-maker.png)
 
+## Community testing and reviews
+
+The Windows custom build has been independently tested by members of a Korean
+MiniDisc community using multiple Sony NetMD and Hi-MD devices. Reports include
+real-world connection, recording, mode-switching, metadata-editing, and
+troubleshooting feedback across several releases.
+
+- [Independent Web MiniDisc Pro V6 user review and discussion](https://naver.me/5xg77Ent)
+  (Korean; Naver Cafe membership may be required to view the full post)
+
 ## Source layout
 
 - `src/`: ElectronWMD source
 - `webminidisc/`: pinned Web MiniDisc Pro submodule
 - `third_party/libwdi/`: complete corresponding source for the WinUSB helper
 - `custom-overrides/`: exact Windows Custom R7 generated-file modifications and label-maker assets
-- `.github/workflows/build-signpath.yml`: Windows build and SignPath submission
+- `.github/workflows/build-signpath.yml`: Windows build and prepared SignPath submission
 - `signpath-artifact-configuration.xml`: Authenticode signing scope
 
 Base revisions:
@@ -103,9 +110,8 @@ The project's code-signing roles, privacy statement, release approval process,
 and Windows system-change policy are documented in
 [CODE-SIGNING-POLICY.md](CODE-SIGNING-POLICY.md).
 
-Free code signing provided by
-[SignPath.io](https://signpath.io/), certificate by
-[SignPath Foundation](https://signpath.org/).
+The repository includes a policy and workflow prepared for possible future
+SignPath Foundation signing. Current release binaries remain unsigned.
 
 ## License and credits
 
